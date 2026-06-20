@@ -1,16 +1,22 @@
 name: build
 
-# Validate the flake on every push and PR to main. The image build step is
-# informational in CI (it is slow); the real image build happens locally with
-# scripts/build-image.sh.
+# Two jobs:
+#   eval  - runs on every push/PR. Fast. Evaluates the whole flake without
+#           building any derivations (`--no-build`), so it catches Nix errors
+#           without compiling CUDA or building a disk image. This is the real
+#           gate for "the flake evaluates".
+#   image - manual only (workflow_dispatch). Builds the minimal qcow image to
+#           prove the image pipeline works. Informational; image builds are
+#           heavy, so the canonical build happens locally with build-image.sh.
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch: {}
 
 jobs:
-  flake-check:
+  eval:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,9 +27,36 @@ jobs:
         with:
           extra_nix_config: "experimental-features = nix-command flakes"
 
-      - name: Flake check
-        run: nix flake check
+      - name: Flake check (evaluate only, do not build)
+        run: nix flake check --no-build --show-trace
 
-      - name: Image build (informational)
-        continue-on-error: true
-        run: nix run github:nix-community/nixos-generators -- --format qcow --flake .#workstation
+      - name: Generate a lock file
+        run: nix flake lock
+
+      - name: Upload flake.lock as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-lock
+          path: flake.lock
+
+  image:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: "experimental-features = nix-command flakes"
+
+      - name: Build the minimal image (informational)
+        run: nix build .#image-minimal --show-trace
