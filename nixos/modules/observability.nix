@@ -1,13 +1,20 @@
-# observability.nix: the audit daemon stub, the run store, and journald persistence.
+# observability.nix: the audit database, its schema initializer, the hearth-runs
+# query, and persistent journald.
 { config, lib, pkgs, ... }:
 let
-  # hearth-runs: quick query of the most recent agent runs. Installed on PATH.
-  # The spec calls for /usr/local/bin/hearth-runs; on NixOS the idiomatic
-  # equivalent is a wrapped script on PATH, which is what writeShellScriptBin
-  # produces. The command name is the same: `hearth-runs`.
+  dbPath = "/var/lib/hearth/runs/audit.db";
+
+  # hearth-runs: print the most recent agent runs in a readable table. Installed
+  # on PATH. The spec calls for /usr/local/bin/hearth-runs; on NixOS the
+  # idiomatic equivalent is a wrapped script on PATH, with the same command name.
   hearthRuns = pkgs.writeShellScriptBin "hearth-runs" ''
-    ${pkgs.sqlite}/bin/sqlite3 /var/lib/hearth/runs/audit.db \
-      "SELECT * FROM agent_runs ORDER BY started_at DESC LIMIT 20;" 2>/dev/null \
+    if [ ! -f "${dbPath}" ]; then
+      echo "No run data yet. Start an agent run first (try: sudo systemctl start hearth-demo-agent)."
+      exit 0
+    fi
+    ${pkgs.sqlite}/bin/sqlite3 -header -column "${dbPath}" \
+      "SELECT started_at, agent_name, model, tokens_in, tokens_out, latency_ms, cost_usd, error
+       FROM agent_runs ORDER BY started_at DESC LIMIT 20;" \
       || echo "No run data yet. Start an agent run first."
   '';
 in
@@ -15,53 +22,21 @@ in
   config = {
     environment.systemPackages = [ pkgs.sqlite hearthRuns ];
 
-    # Audit run store schema (created by the real audit daemon, documented here):
-    #
-    #   CREATE TABLE agent_runs (
-    #     id          INTEGER PRIMARY KEY,
-    #     agent_name  TEXT,
-    #     run_id      TEXT,
-    #     started_at  TEXT,
-    #     finished_at TEXT,
-    #     tokens_in   INTEGER,
-    #     tokens_out  INTEGER,
-    #     cost_usd    REAL,
-    #     latency_ms  INTEGER,
-    #     error       TEXT,
-    #     model       TEXT
-    #   );
-    #
-    # The database lives at /var/lib/hearth/runs/audit.db.
-
-    systemd.tmpfiles.rules = [
-      "d /var/lib/hearth/bin 0750 hearth hearth -"
-    ];
-
-    # Stub audit daemon script. Replace with the real aggregation daemon that
-    # tails agent logs and writes rows into agent_runs.
-    environment.etc."hearth/audit-daemon".source = pkgs.writeShellScript "hearth-audit-daemon" ''
-      echo "hearth-audit daemon starting"
-      # TODO: replace with the real audit aggregation loop that reads agent run
-      # logs from /var/lib/hearth/logs and writes rows into the SQLite store at
-      # /var/lib/hearth/runs/audit.db.
-      while true; do
-        sleep 3600
-      done
-    '';
-
-    systemd.services.hearth-audit = {
-      description = "hearth audit aggregation daemon (stub)";
-      after = [ "multi-user.target" ];
+    # The audit schema lives in agent/hearth_agent.py (the single source of
+    # truth). This oneshot creates it on boot so the database and table exist
+    # before the first agent run. The columns are:
+    #   id, agent_name, run_id, started_at, finished_at, tokens_in, tokens_out,
+    #   cost_usd, latency_ms, error, model
+    systemd.services.hearth-audit-init = lib.mkIf config.hearth.agents.enable {
+      description = "Initialize the hearth audit database schema";
       wantedBy = [ "multi-user.target" ];
+      after = [ "local-fs.target" ];
       serviceConfig = {
-        Type = "simple";
-        # The daemon script is installed at /etc/hearth/audit-daemon and copied
-        # to /var/lib/hearth/bin/audit-daemon, which is the path the spec uses.
-        ExecStartPre = "${pkgs.coreutils}/bin/install -m0755 /etc/hearth/audit-daemon /var/lib/hearth/bin/audit-daemon";
-        ExecStart = "/var/lib/hearth/bin/audit-daemon";
-        Restart = "on-failure";
+        Type = "oneshot";
+        RemainAfterExit = true;
         User = "hearth";
         Group = "hearth";
+        ExecStart = "${config.hearth.agents.package}/bin/hearth-agent --init-db --db ${dbPath}";
       };
     };
 
