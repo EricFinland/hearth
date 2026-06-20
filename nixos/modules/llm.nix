@@ -27,8 +27,10 @@ in
 
     services.ollama = {
       enable = true;
-      # Use the NVIDIA GPU for inference. See the passthrough note below.
-      acceleration = "cuda";
+      # Use the CUDA build of Ollama for NVIDIA GPU inference. Current nixpkgs
+      # removed services.ollama.acceleration; you pick the package variant
+      # instead (ollama-cuda, ollama-rocm, ollama-vulkan, or plain ollama).
+      package = pkgs.ollama-cuda;
       # Store models on the hearth working tree. This maps to the OLLAMA_MODELS
       # environment variable internally. Using the module option (instead of
       # overriding the env var by hand) avoids a definition conflict with the
@@ -60,7 +62,7 @@ in
       script = ''
         set -euo pipefail
         ${lib.concatMapStringsSep "\n"
-          (m: ''echo "hearth: pulling ${m}"; ${pkgs.ollama}/bin/ollama pull ${lib.escapeShellArg m} || echo "hearth: pull failed for ${m}, continuing"'')
+          (m: ''echo "hearth: pulling ${m}"; ${config.services.ollama.package}/bin/ollama pull ${lib.escapeShellArg m} || echo "hearth: pull failed for ${m}, continuing"'')
           cfg.models}
       '';
     };
