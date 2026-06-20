@@ -36,7 +36,7 @@
     environment.systemPackages = with pkgs; [
       python3
       uv
-      nodejs_20
+      nodejs_22
     ];
   };
 }
