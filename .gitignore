@@ -1,0 +1,9 @@
+result
+result-*
+.direnv
+.env
+secrets/*.age
+secrets/*.yaml
+!secrets/example.yaml
+*.key
+.DS_Store
