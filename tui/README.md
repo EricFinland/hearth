@@ -68,6 +68,23 @@ results.
 
 ## 5. Status
 
-Not yet implemented. Scheduled for Day 5 of the roadmap. When built, it should
-launch on login (from programs.bash in nixos/modules/shell.nix) and fall back to
-the existing `hearth-status` text command if the TUI cannot start.
+Implemented (2026-06-20). The app is dashboard/hearth_dashboard.py, built on
+Textual, packaged as the `hearth-dashboard` command in nixos/modules/shell.nix.
+
+How it runs:
+- It launches automatically on an interactive login shell (the programs.bash
+  hook in modules/shell.nix). Press `q` to quit back to the shell. Set
+  `HEARTH_NO_DASHBOARD=1` to skip the auto-launch.
+- `hearth-dashboard --plain` prints a one-shot text snapshot. This is also the
+  automatic fallback if the terminal cannot host a TUI.
+- `hearth-dashboard --self-test` exercises the data layer against a temp
+  database.
+
+What is verified vs pending:
+- The data layer (SQLite recent runs and spend) passes a local self-test.
+- The Textual UI passes a headless smoke test (compose, mount, refresh, the runs
+  table populates, the refresh and quit actions work) against Textual 8.2.7.
+- The live system panels (systemd unit states, Ollama model list, running agent
+  count) degrade to safe placeholders off-target and need the booted VM to show
+  real values.
+

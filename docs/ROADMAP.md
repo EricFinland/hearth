@@ -46,7 +46,12 @@ list) is captured as a stretch item below.
 
 ## Day 5: Shell and dashboard
 
-- [ ] login boots into a TUI showing system state, running agents, model status, recent runs, spend
+- [x] login boots into a TUI showing system state, running agents, model status, recent runs, spend (dashboard/hearth_dashboard.py, Textual; auto-launches on login via modules/shell.nix)
+
+Notes: data layer unit-tested locally, the Textual UI passed a headless smoke
+test against Textual 8.2.7, and the whole config builds into the image in CI.
+The live panels (unit states, model list) show real values only on the booted
+VM; off-target they degrade to placeholders.
 
 ## Day 6: Packaging
 
