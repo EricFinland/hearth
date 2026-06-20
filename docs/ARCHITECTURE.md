@@ -42,15 +42,17 @@ evaluation. The Proxmox VM is the build and run target.
   /var/lib/hearth/models.
 
 - agents.nix: the /var/lib/hearth directory layout via tmpfiles, the base agent
-  runtimes (Python with uv, Node.js LTS), and the sops-nix integration stub for
-  secret material.
+  runtimes (Python with uv, Node.js LTS), the hearth-agent runner
+  (agent/hearth_agent.py) packaged onto PATH, a sandboxed demo agent, and the
+  sops-nix integration stub for secret material.
 
 - sandbox.nix: the reusable least-privilege systemd profile that agent services
   merge in. This is the core isolation mechanism. See the threat model below.
 
-- observability.nix: the audit daemon (currently a stub), the SQLite run store
-  schema, the `hearth-runs` query command, and persistent journald with a 2G
-  cap.
+- observability.nix: the SQLite audit store, a schema initializer that runs on
+  boot (hearth-audit-init, which calls hearth-agent --init-db so the schema has
+  one source of truth), the `hearth-runs` query command, and persistent journald
+  with a 2G cap.
 
 - networking.nix: Tailscale for mesh access, a firewall that trusts the
   Tailscale interface and opens only SSH and the local Ollama port.
