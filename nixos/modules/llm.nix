@@ -1,19 +1,27 @@
 # llm.nix: Ollama service, CUDA acceleration, declarative model manifest.
+# The whole stack is gated behind hearth.llm.enable so a minimal image can be
+# built without compiling CUDA (see flake.nix workstation-minimal).
 { config, lib, pkgs, ... }:
 let
   cfg = config.hearth.llm;
 in
 {
-  options.hearth.llm.models = lib.mkOption {
-    type = lib.types.listOf lib.types.str;
-    default = [ "llama3.2:3b" "mistral:7b" ];
-    description = ''
-      Models to pull on activation. Each string is passed verbatim to
-      `ollama pull`. The hearth-model-pull oneshot service iterates this list.
-    '';
+  options.hearth.llm = {
+    enable = lib.mkEnableOption "the hearth LLM stack (Ollama with CUDA)" // {
+      default = true;
+    };
+
+    models = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "llama3.2:3b" "mistral:7b" ];
+      description = ''
+        Models to pull on activation. Each string is passed verbatim to
+        `ollama pull`. The hearth-model-pull oneshot service iterates this list.
+      '';
+    };
   };
 
-  config = {
+  config = lib.mkIf cfg.enable {
     # CUDA packages are unfree. Required for the GTX 1660 Ti acceleration below.
     nixpkgs.config.allowUnfree = true;
 
@@ -21,6 +29,13 @@ in
       enable = true;
       # Use the NVIDIA GPU for inference. See the passthrough note below.
       acceleration = "cuda";
+      # Store models on the hearth working tree. This maps to the OLLAMA_MODELS
+      # environment variable internally. Using the module option (instead of
+      # overriding the env var by hand) avoids a definition conflict with the
+      # value the ollama module already sets.
+      # TODO (Day 2): confirm the ollama dynamic user can write this path; it
+      # lives outside the unit's default StateDirectory.
+      models = "/var/lib/hearth/models";
     };
 
     # GPU passthrough note:
@@ -29,10 +44,6 @@ in
     # here. See: https://pve.proxmox.com/wiki/PCI_Passthrough
     # Inside the VM, `nvidia-smi` should list the card once passthrough and the
     # NVIDIA driver are in place.
-
-    # Store models on the hearth working tree, not the default state dir, so
-    # model storage lives alongside the rest of /var/lib/hearth.
-    systemd.services.ollama.environment.OLLAMA_MODELS = "/var/lib/hearth/models";
 
     # Pull the declared models once Ollama is up. Idempotent: `ollama pull`
     # is a no-op for models already present.
