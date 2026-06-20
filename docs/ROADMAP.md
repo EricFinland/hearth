@@ -4,10 +4,14 @@ This is the working task list. Check items off as you go.
 
 ## Day 1: Foundation (de-risk the loop)
 
-- [ ] flake.nix evaluates, `nix flake check` passes
-- [ ] base.nix builds a minimal bootable NixOS config
-- [ ] produce an image and boot it as a Proxmox VM
-- [ ] confirm ssh in and `nixos-rebuild switch` works against the repo
+- [x] flake.nix evaluates, `nix flake check` passes (verified in CI with `--no-build`, 2026-06-20)
+- [x] base.nix builds a minimal bootable NixOS config (`.#image-minimal` built green in CI, 2026-06-20)
+- [ ] produce an image and boot it as a Proxmox VM (image build verified in CI; booting needs your Proxmox node, see docs/RUNBOOK.md)
+- [ ] confirm ssh in and `nixos-rebuild switch` works against the repo (needs the booted VM, see docs/RUNBOOK.md Step 4 to 5)
+
+Notes: items 1 and 2 are done and verified on real Nix in GitHub Actions. Items
+3 and 4 are blocked only on hardware (a Proxmox node and SSH access), not on
+code. Everything for them is in place and documented in docs/RUNBOOK.md.
 
 ## Day 2: LLM layer
 
