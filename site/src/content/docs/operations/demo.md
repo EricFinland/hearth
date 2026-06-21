@@ -5,8 +5,8 @@ description: A walkthrough of hearth running, for a portfolio or live demo.
 
 ## Audience
 
-Personal portfolio. Potential employers or collaborators who want to see a
-working, security-first local agent platform, not a slide deck.
+Eric Catalano's personal portfolio. Potential employers or collaborators who want
+to see a working, security-first local agent platform, not a slide deck.
 
 ## What to show
 

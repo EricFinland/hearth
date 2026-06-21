@@ -18,6 +18,9 @@ export default defineConfig({
         baseUrl: 'https://github.com/EricFinland/hearth/edit/main/site/',
       },
       lastUpdated: true,
+      components: {
+        Footer: './src/components/Footer.astro',
+      },
       customCss: ['./src/styles/theme.css'],
       head: [
         { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
