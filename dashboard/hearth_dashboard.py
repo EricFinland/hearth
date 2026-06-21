@@ -34,8 +34,18 @@ OLLAMA_URL = os.environ.get("HEARTH_OLLAMA", "http://127.0.0.1:11434")
 UNITS = [
     ("ollama", "ollama.service"),
     ("audit", "hearth-audit-init.service"),
+    ("mapd", "hearth-mapd.service"),
     ("tailscale", "tailscaled.service"),
 ]
+
+# Terminal glyphs for each runtime state. The state names match
+# agent/hearth_state.py (the source of truth); the glyphs are plain ASCII here
+# because the bare Linux console (tty1) does not render emoji reliably. The web
+# UI uses emoji for the same states.
+STATE_ICONS = {
+    "SPAWNING": "*", "IDLE": "z", "THINKING": "?", "TOOL_CALL": "+",
+    "WAITING_IO": "~", "ERRORED": "!", "DONE": "#",
+}
 
 
 def _systemctl(*args):
@@ -142,12 +152,44 @@ def spend_summary(db):
         con.close()
 
 
+def agent_states(db):
+    """Live runtime state of every agent (from agent/hearth_state.py)."""
+    con = _connect(db)
+    if con is None:
+        return []
+    try:
+        cur = con.execute(
+            "SELECT agent_id, state, detail FROM agent_state ORDER BY agent_id"
+        )
+        return [
+            {
+                "agent_id": r[0],
+                "state": r[1],
+                "detail": r[2] or "",
+                "icon": STATE_ICONS.get(r[1], "?"),
+            }
+            for r in cur.fetchall()
+        ]
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+
+
 def snapshot_text(db=DB_PATH):
     """A one-shot plain-text rendering, used for --plain and as the fallback."""
     lines = ["=== hearth dashboard ===", "", "SYSTEM"]
     for label, state in system_status():
         lines.append("  {:10} {}".format(label, state))
-    lines.append("  {:10} {}".format("agents", running_agents()))
+
+    states = agent_states(db)
+    lines.append("")
+    lines.append("AGENTS ({})".format(len(states)))
+    if states:
+        for a in states:
+            lines.append("  {} {:16} {}".format(a["icon"], a["agent_id"], a["state"].lower()))
+    else:
+        lines.append("  (no agents yet)")
 
     models = model_status()
     lines.append("")
@@ -204,6 +246,7 @@ def make_app(db=DB_PATH):
             yield Header(show_clock=True)
             with Horizontal():
                 with Vertical(classes="sidebar"):
+                    yield Static(id="agents", classes="panel")
                     yield Static(id="system", classes="panel")
                     yield Static(id="models", classes="panel")
                     yield Static(id="spend", classes="panel")
@@ -227,10 +270,20 @@ def make_app(db=DB_PATH):
             self.exit()
 
         def refresh_data(self) -> None:
+            states = agent_states(db)
+            agents_text = "AGENTS ({})\n".format(len(states)) + (
+                "\n".join(
+                    "{} {} {}".format(a["icon"], a["agent_id"], a["state"].lower())
+                    for a in states
+                )
+                if states
+                else "(none yet)"
+            )
+            self.query_one("#agents", Static).update(agents_text)
+
             sys_text = "SYSTEM\n" + "\n".join(
                 "{:10} {}".format(label, state) for label, state in system_status()
             )
-            sys_text += "\n{:10} {}".format("agents", running_agents())
             self.query_one("#system", Static).update(sys_text)
 
             models = model_status()
