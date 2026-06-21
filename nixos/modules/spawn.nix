@@ -29,6 +29,11 @@ lib.mkIf config.hearth.agents.enable {
     description = "hearth on-demand agent run %i";
     serviceConfig = config.hearth.sandbox.profile // {
       Type = "oneshot";
+      # Extend the sandbox allow list with the queue dir so the instance can
+      # delete its own request file after reading it (the profile only grants
+      # agents + runs). Done before running the agent, so a failed run does not
+      # leave a file that would respawn the instance.
+      ReadWritePaths = config.hearth.sandbox.profile.ReadWritePaths ++ [ "/var/lib/hearth/queue" ];
       ExecStart = "${runner}/bin/hearth-run-from-queue %i";
     };
   };
