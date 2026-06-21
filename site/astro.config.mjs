@@ -58,12 +58,14 @@ export default defineConfig({
             { label: 'Features', link: '/concepts/features/' },
             { label: 'Sandboxing & threat model', link: '/concepts/sandboxing/' },
             { label: 'Observability & audit', link: '/concepts/observability/' },
+            { label: 'MCP audit gate', link: '/concepts/mcp-audit-gate/' },
           ],
         },
         {
           label: 'Operations',
           items: [
             { label: 'Runbook', link: '/operations/runbook/' },
+            { label: 'Command reference', link: '/operations/commands/' },
             { label: 'Demo', link: '/operations/demo/' },
           ],
         },
