@@ -2,6 +2,8 @@
 
 An opinionated, reproducible, security-first Linux system where local LLMs and agents run sandboxed by default, every agent run is audited, and system state is legible from boot.
 
+**📖 Documentation: https://ericfinland.github.io/hearth/**
+
 ## What this is / what it is not
 
 hearth is a declarative NixOS configuration for running local language models and autonomous agents. It is not a custom Linux kernel or a remastered distro. It is a single flake.nix that Nix builds reproducibly and deploys to any NixOS host or Proxmox VM.
@@ -28,6 +30,10 @@ bash scripts/bootstrap.sh
 ```
 
 ## Documentation
+
+Full documentation lives at **https://ericfinland.github.io/hearth/**.
+
+In-repo sources:
 
 - [Roadmap](docs/ROADMAP.md): the day-by-day build plan.
 - [Architecture](docs/ARCHITECTURE.md): system diagram, module responsibilities, and the threat model.
