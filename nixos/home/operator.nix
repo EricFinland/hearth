@@ -49,6 +49,13 @@ in
       key = "Meta+A";
       command = "${toggle}/bin/hearth-command-toggle";
     };
+
+    # No idle screen lock: the box auto-logs in and is physically controlled,
+    # so locking on idle just gets in the way.
+    configFile.kscreenlockerrc.Daemon = {
+      Autolock = false;
+      LockOnResume = false;
+    };
   };
 
   xdg.configFile."conky/hearth.conf".text = ''
