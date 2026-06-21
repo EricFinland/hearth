@@ -20,7 +20,9 @@ Standard library only (http.server + sqlite3). Run with:
 import argparse
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -91,6 +93,66 @@ def max_event_id(db):
         con.close()
 
 
+def parse_gpu(csv_text):
+    """Parse one line of: nvidia-smi --query-gpu=name,utilization.gpu,
+    memory.used,memory.total --format=csv,noheader,nounits"""
+    line = (csv_text or "").strip().splitlines()
+    if not line:
+        return None
+    parts = [p.strip() for p in line[0].split(",")]
+    if len(parts) < 4:
+        return None
+    try:
+        return {
+            "name": parts[0],
+            "util_pct": int(float(parts[1])),
+            "mem_used_mb": int(float(parts[2])),
+            "mem_total_mb": int(float(parts[3])),
+        }
+    except ValueError:
+        return None
+
+
+def parse_meminfo(text):
+    """Parse /proc/meminfo into used/total MB."""
+    vals = {}
+    for ln in (text or "").splitlines():
+        if ":" in ln:
+            k, v = ln.split(":", 1)
+            vals[k.strip()] = v.strip()
+
+    def kb(key):
+        try:
+            return int(vals.get(key, "0").split()[0])
+        except (ValueError, IndexError):
+            return 0
+
+    total = kb("MemTotal")
+    available = kb("MemAvailable")
+    used = max(total - available, 0)
+    return {"used_mb": used // 1024, "total_mb": total // 1024}
+
+
+def read_stats():
+    gpu = None
+    if shutil.which("nvidia-smi"):
+        try:
+            out = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5).stdout
+            gpu = parse_gpu(out)
+        except (OSError, subprocess.SubprocessError):
+            gpu = None
+    mem = None
+    try:
+        with open("/proc/meminfo") as fh:
+            mem = parse_meminfo(fh.read())
+    except OSError:
+        mem = None
+    return {"gpu": gpu, "mem": mem}
+
+
 class Handler(BaseHTTPRequestHandler):
     # set by the server factory below
     db = DEFAULT_DB
@@ -121,6 +183,10 @@ class Handler(BaseHTTPRequestHandler):
             )
         if path == "/events":
             return self._serve_events()
+        if path == "/stats":
+            return self._send(200, json.dumps(read_stats()), "application/json")
+        if path == "/command":
+            return self._serve_static("command.html", "text/html; charset=utf-8")
         return self._send(404, "not found")
 
     def _serve_static(self, name, ctype):
@@ -162,6 +228,16 @@ class Handler(BaseHTTPRequestHandler):
             return  # client went away
 
 
+def _self_test():
+    g = parse_gpu("NVIDIA GeForce RTX 2060, 13, 2538, 6144\n")
+    assert g == {"name": "NVIDIA GeForce RTX 2060", "util_pct": 13,
+                 "mem_used_mb": 2538, "mem_total_mb": 6144}, g
+    m = parse_meminfo("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\n")
+    assert m == {"used_mb": 8000, "total_mb": 16000}, m
+    print("hearth-mapd self-test OK")
+    return 0
+
+
 def make_server(host, port, db, static_dir):
     Handler.db = db
     Handler.static_dir = static_dir
@@ -174,7 +250,12 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8770)
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--static-dir", default=DEFAULT_STATIC)
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the parser self-test and exit")
     args = parser.parse_args(argv)
+
+    if args.self_test:
+        return _self_test()
 
     server = make_server(args.host, args.port, args.db, args.static_dir)
     print("hearth-mapd serving on http://{}:{} (db={})".format(args.host, args.port, args.db))
