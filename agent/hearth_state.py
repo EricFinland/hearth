@@ -81,9 +81,12 @@ def _connect(db):
     parent = os.path.dirname(db)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    # Default (rollback journal) mode, not WAL. WAL needs a shared -shm file that
+    # every writer must write, which is awkward across a DynamicUser agent and
+    # the hearth user. With the default journal, only the db file's group-write
+    # bit matters (it lives in the setgid, group-writable runs dir). The timeout
+    # lets concurrent writers wait for the lock instead of failing immediately.
     con = sqlite3.connect(db, timeout=10)
-    # WAL lets many sandboxed agents write transitions while the UI reads.
-    con.execute("PRAGMA journal_mode=WAL;")
     return con
 
 
