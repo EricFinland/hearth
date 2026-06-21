@@ -28,6 +28,24 @@ DEFAULT_DB = "/var/lib/hearth/runs/audit.db"
 DEFAULT_RUNS_DIR = "/var/lib/hearth/runs"
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 
+# Live runtime state for the tycoon map (agent/hearth_state.py). Optional: if it
+# is not importable, state emission is a no-op and auditing still works. Visual
+# state is driven only by these calls in the runtime, never by model output.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import hearth_state
+except Exception:  # noqa: BLE001
+    hearth_state = None
+
+
+def _emit(agent_id, state, detail, db):
+    if hearth_state is None:
+        return
+    try:
+        hearth_state.emit_state(agent_id, state, detail, db=db)
+    except Exception:  # never let visual state break a real run
+        pass
+
 # The single source of truth for the audit schema. observability.nix calls
 # `hearth-agent --init-db` so the schema is defined in exactly one place.
 SCHEMA = """
@@ -124,6 +142,8 @@ def run_agent(args):
     tokens_out = 0
     response_text = ""
 
+    _emit(args.agent_name, "SPAWNING", "starting", args.db)
+    _emit(args.agent_name, "THINKING", "calling " + args.model, args.db)
     try:
         data = call_ollama(args.ollama_url, args.model, args.prompt, args.timeout)
         response_text = data.get("response", "")
@@ -133,6 +153,8 @@ def run_agent(args):
         error = "{}: {}".format(type(exc).__name__, exc)
 
     latency_ms = int((time.monotonic() - t0) * 1000)
+    _emit(args.agent_name, "ERRORED" if error else "DONE",
+          error or "{} tokens".format(tokens_out), args.db)
 
     run = {
         "agent_name": args.agent_name,

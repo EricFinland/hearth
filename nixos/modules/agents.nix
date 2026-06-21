@@ -4,15 +4,26 @@
 let
   cfg = config.hearth.agents;
 
-  # The agent runner, packaged from agent/hearth_agent.py. It is standard
-  # library only, so we just wrap the system python3 around the script. Keeping
-  # the source as a real .py file (not an inline string) means it can be run and
-  # tested directly: `python agent/hearth_agent.py --self-test`.
+  # The agent sources, packaged as a directory so hearth_agent.py can import
+  # hearth_state.py (they live side by side). Standard library only, so we just
+  # wrap the system python3 around the scripts. They can also be run and tested
+  # directly: `python agent/hearth_agent.py --self-test`.
+  agentSrc = ../../agent;
+
   hearthAgent = pkgs.writeShellApplication {
     name = "hearth-agent";
     runtimeInputs = [ pkgs.python3 ];
     text = ''
-      exec ${pkgs.python3}/bin/python3 ${../../agent/hearth_agent.py} "$@"
+      exec ${pkgs.python3}/bin/python3 ${agentSrc}/hearth_agent.py "$@"
+    '';
+  };
+
+  # hearth-state: inspect or drive agent runtime state (used by the tycoon map).
+  hearthState = pkgs.writeShellApplication {
+    name = "hearth-state";
+    runtimeInputs = [ pkgs.python3 ];
+    text = ''
+      exec ${pkgs.python3}/bin/python3 ${agentSrc}/hearth_state.py "$@"
     '';
   };
 in
@@ -56,12 +67,13 @@ in
       #       age: <your-age-public-key>
     '';
 
-    # Base agent runtimes plus the hearth-agent runner on PATH.
+    # Base agent runtimes plus the hearth-agent runner and hearth-state CLI.
     environment.systemPackages = with pkgs; [
       python3
       uv
       nodejs_22
       hearthAgent
+      hearthState
     ];
 
     # A demonstration agent that runs under the full sandbox profile and records

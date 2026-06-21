@@ -13,6 +13,7 @@
     ./modules/shell.nix
     ./modules/mcp.nix
     ./modules/gpu-nvidia.nix
+    ./modules/mapui.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this

@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>hearth map</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0e1116; color: #d7dde5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  #bar { display: flex; align-items: center; gap: 1rem; padding: .5rem .9rem;
+    border-bottom: 1px solid #232a33; font-size: 14px; }
+  #bar b { color: #7fd1ff; }
+  #conn { margin-left: auto; font-size: 12px; color: #8a93a0; }
+  #conn.ok { color: #6fcf7f; }
+  #conn.down { color: #e06a6a; }
+  #legend { display: flex; gap: .8rem; flex-wrap: wrap; padding: .4rem .9rem;
+    font-size: 12px; color: #9aa4b2; border-bottom: 1px solid #232a33; }
+  canvas { display: block; width: 100%; height: calc(100vh - 84px); }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <b>hearth</b> <span>agent map</span>
+    <span id="count">0 agents</span>
+    <span id="conn">connecting…</span>
+  </div>
+  <div id="legend"></div>
+  <canvas id="map"></canvas>
+
+<script>
+// Fixed icon set. MUST match agent/hearth_state.py STATE_ICONS.
+const STATE_ICONS = {
+  SPAWNING: "✨", IDLE: "💤", THINKING: "💭", TOOL_CALL: "🔧",
+  WAITING_IO: "⏳", ERRORED: "❗", DONE: "✅",
+};
+const STATE_COLOR = {
+  SPAWNING: "#8a93a0", IDLE: "#4a5562", THINKING: "#7fd1ff", TOOL_CALL: "#e0b341",
+  WAITING_IO: "#b08cff", ERRORED: "#e06a6a", DONE: "#6fcf7f",
+};
+
+const agents = new Map();   // agent_id -> {state, detail, updated_at}
+const canvas = document.getElementById("map");
+const ctx = canvas.getContext("2d");
+const connEl = document.getElementById("conn");
+const countEl = document.getElementById("count");
+
+// Build the legend once from the fixed set.
+document.getElementById("legend").innerHTML = Object.keys(STATE_ICONS)
+  .map(s => `${STATE_ICONS[s]} ${s.toLowerCase()}`).join("   ");
+
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  canvas.width = r.width * devicePixelRatio;
+  canvas.height = r.height * devicePixelRatio;
+  ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+}
+window.addEventListener("resize", resize);
+resize();
+
+// Stable position for an agent: hash its id into a grid cell so a character
+// stays in the same spot across updates.
+function hash(s) { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function cellFor(id, cols, rows) { const h = hash(id); return { cx: h % cols, cy: Math.floor(h / cols) % rows }; }
+
+function setConn(state) {
+  connEl.className = state;
+  connEl.textContent = state === "ok" ? "live" : (state === "down" ? "disconnected (retrying)" : "connecting…");
+}
+
+function applySnapshot(list) { agents.clear(); for (const a of list) agents.set(a.agent_id, a); }
+function applyEvent(ev) {
+  const a = agents.get(ev.agent_id) || { agent_id: ev.agent_id };
+  a.state = ev.state; a.detail = ev.detail; a.updated_at = ev.ts;
+  agents.set(ev.agent_id, a);
+}
+
+function draw() {
+  const w = canvas.width / devicePixelRatio, h = canvas.height / devicePixelRatio;
+  ctx.clearRect(0, 0, w, h);
+  countEl.textContent = agents.size + (agents.size === 1 ? " agent" : " agents");
+
+  const n = Math.max(agents.size, 1);
+  const cols = Math.ceil(Math.sqrt(n) * (w / h) ) || 1;
+  const rows = Math.ceil(n / cols) || 1;
+  const cw = w / Math.max(cols, 1), ch = h / Math.max(rows, 1);
+
+  // Lay agents out left-to-right, top-to-bottom in arrival (id-sorted) order so
+  // milestone 1 is simple and stable. (Station-based walking comes later.)
+  const ids = [...agents.keys()].sort();
+  ids.forEach((id, i) => {
+    const a = agents.get(id);
+    const col = i % cols, row = Math.floor(i / cols);
+    const x = col * cw + cw / 2, y = row * ch + ch / 2;
+    const color = STATE_COLOR[a.state] || "#4a5562";
+    const dim = a.state === "DONE" ? 0.45 : 1;
+
+    ctx.globalAlpha = dim;
+    // station pad
+    ctx.fillStyle = "#171c24";
+    ctx.beginPath(); ctx.ellipse(x, y + 26, 34, 10, 0, 0, Math.PI * 2); ctx.fill();
+    // character body
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(x, y, 18, 0, Math.PI * 2); ctx.fill();
+    ctx.font = "18px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("🧑‍💻", x, y + 1);
+    // status icon bubble above
+    ctx.font = "22px serif";
+    ctx.fillText(STATE_ICONS[a.state] || "?", x, y - 30);
+    // labels
+    ctx.globalAlpha = dim;
+    ctx.fillStyle = "#d7dde5"; ctx.font = "12px ui-monospace, monospace";
+    ctx.fillText(id, x, y + 44);
+    ctx.fillStyle = color; ctx.font = "11px ui-monospace, monospace";
+    ctx.fillText((a.state || "").toLowerCase(), x, y + 60);
+    ctx.globalAlpha = 1;
+  });
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// Live updates via SSE, with a polling fallback if the stream drops.
+let pollTimer = null;
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
+    try {
+      const r = await fetch("/state"); const j = await r.json();
+      applySnapshot(j.agents || []); setConn("down");
+    } catch (e) { setConn("down"); }
+  }, 1500);
+}
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+function connect() {
+  setConn("connecting");
+  const es = new EventSource("/events");
+  es.onopen = () => { stopPolling(); setConn("ok"); };
+  es.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.type === "snapshot") applySnapshot(msg.agents || []);
+    else if (msg.type === "event") applyEvent(msg);
+  };
+  es.onerror = () => { setConn("down"); startPolling(); /* EventSource auto-reconnects */ };
+}
+connect();
+</script>
+</body>
+</html>
