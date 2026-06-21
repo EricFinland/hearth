@@ -54,12 +54,20 @@ in
       wantedBy = [ "multi-user.target" ];
       # No OLLAMA_MODELS here: `ollama pull` talks to the running server, which
       # owns where models are stored. The pull just needs the server reachable.
+      # HOME must be set or the ollama CLI panics ("$HOME is not defined").
+      environment.HOME = "/root";
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
       };
       script = ''
-        set -euo pipefail
+        set -uo pipefail
+        # Ollama reports active before its socket is ready, so `after` is not
+        # enough. Wait until it actually answers (up to ~60s) before pulling.
+        for _ in $(seq 1 60); do
+          ${config.services.ollama.package}/bin/ollama list >/dev/null 2>&1 && break
+          sleep 1
+        done
         ${lib.concatMapStringsSep "\n"
           (m: ''echo "hearth: pulling ${m}"; ${config.services.ollama.package}/bin/ollama pull ${lib.escapeShellArg m} || echo "hearth: pull failed for ${m}, continuing"'')
           cfg.models}
