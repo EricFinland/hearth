@@ -27,7 +27,9 @@
 
     users.users.operator = {
       isNormalUser = true;
-      extraGroups = [ "wheel" "networkmanager" ];
+      # hearth: so the operator can read the agent audit database for hearth-runs
+      # and the dashboard. wheel: sudo. networkmanager: manage WiFi.
+      extraGroups = [ "wheel" "networkmanager" "hearth" ];
       openssh.authorizedKeys.keys = config.hearth.adminKeys;
       # Console fallback for a local login. Change it on first boot with
       # `passwd`. SSH itself still requires a key.

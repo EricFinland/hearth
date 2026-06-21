@@ -36,10 +36,12 @@ in
         RemainAfterExit = true;
         User = "hearth";
         Group = "hearth";
-        # Create the database group-writable so sandboxed agents (hearth group)
-        # can record their runs and states into it.
+        # Make the database group-writable so sandboxed agents (hearth group)
+        # can record their runs and states into it. SQLite creates the file
+        # 0644-based, so an explicit chmod is needed (UMask alone yields 0640).
         UMask = "0007";
         ExecStart = "${config.hearth.agents.package}/bin/hearth-agent --init-db --db ${dbPath}";
+        ExecStartPost = "${pkgs.coreutils}/bin/chmod 0660 ${dbPath}";
       };
     };
 

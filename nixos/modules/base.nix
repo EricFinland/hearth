@@ -14,6 +14,10 @@
     group = "hearth";
     home = "/var/lib/hearth";
     createHome = true;
+    # 0750 (not the default 0700) so members of the hearth group can traverse
+    # the home to reach the group-writable runs directory. The secrets directory
+    # under it stays 0700, so group members still cannot read secrets.
+    homeMode = "0750";
     description = "hearth service account";
     shell = pkgs.bashInteractive;
   };
