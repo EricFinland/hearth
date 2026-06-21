@@ -61,6 +61,9 @@
       # installed directly on the machine, not imaged. See nixos/hosts/blade.nix.
       nixosConfigurations.blade = nixpkgs.lib.nixosSystem {
         inherit system;
+        # plasma-manager is passed through so blade.nix can hand it to the
+        # operator home-manager config (per-user KDE theming).
+        specialArgs = { inherit plasma-manager; };
         modules = [
           ./nixos/hosts/blade.nix
           sops-nix.nixosModules.sops

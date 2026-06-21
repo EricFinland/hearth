@@ -1,6 +1,6 @@
 # blade.nix: the physical Razer Blade 15 host (bare metal, not a VM).
 # i7-10750H, RTX 2060 Mobile, 16 GB RAM, Samsung NVMe, WiFi only.
-{ ... }:
+{ plasma-manager, ... }:
 {
   imports = [
     ../configuration.nix
@@ -28,6 +28,15 @@
   # SSH is confirmed and rollback is available, they are turned on.
   hearth.llm.enable = true;
   hearth.gpu.enable = true;
+
+  # This laptop has a screen, so turn on the hearth KDE Plasma desktop and
+  # the operator's per-user theming/panel/conky/command-toggle (plasma-manager).
+  hearth.desktop.enable = true;
+
+  home-manager.useGlobalPkgs = true;
+  home-manager.useUserPackages = true;
+  home-manager.users.operator = import ../home/operator.nix;
+  home-manager.extraSpecialArgs = { inherit plasma-manager; };
 
   # The operator admin key, so SSH works on the very first boot.
   hearth.adminKeys = [
