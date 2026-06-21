@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#1c1813"/>
+  <rect x="0" y="0" width="1200" height="8" fill="#cc785c"/>
+  <g transform="translate(90, 230) scale(5.2)">
+    <path d="M16 3 C 11 10 8 13 8 19 a8 8 0 0 0 16 0 c0 -4 -3 -7 -5 -9 c0 2 -1 3 -2 3 c1 -4 -1 -9 -1 -13 z" fill="#cc785c"/>
+    <path d="M16 12 C 14 15 13 16 13 19.5 a3 3 0 0 0 6 0 c0 -2 -1 -3 -2 -4 c0 1 -1 2 -2 1 z" fill="#eab59e"/>
+  </g>
+  <text x="290" y="300" font-family="Georgia, 'Times New Roman', serif" font-size="92" font-weight="500" fill="#faf7f2">hearth</text>
+  <text x="294" y="372" font-family="Inter, system-ui, sans-serif" font-size="34" fill="#c6c0b6">Security-first NixOS for local LLMs and sandboxed agents</text>
+  <text x="294" y="430" font-family="Inter, system-ui, sans-serif" font-size="26" fill="#cc785c">ericfinland.github.io/hearth</text>
+</svg>
