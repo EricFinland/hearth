@@ -51,6 +51,17 @@
         modules = hostModules ++ [ minimalModule ];
       };
 
+      # The physical Razer Blade 15 (bare metal, WiFi, RTX 2060). Built and
+      # installed directly on the machine, not imaged. See nixos/hosts/blade.nix.
+      nixosConfigurations.blade = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          ./nixos/hosts/blade.nix
+          sops-nix.nixosModules.sops
+          home-manager.nixosModules.home-manager
+        ];
+      };
+
       # Proxmox-ready images. qcow-efi pairs with the systemd-boot EFI setup in
       # nixos/modules/base.nix, so build the Proxmox VM with OVMF (UEFI).
       # Build with: nix build .#image-minimal   (or .#image for the full stack)

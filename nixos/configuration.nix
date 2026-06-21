@@ -4,6 +4,7 @@
 {
   imports = [
     ./modules/base.nix
+    ./modules/admin.nix
     ./modules/llm.nix
     ./modules/agents.nix
     ./modules/sandbox.nix
@@ -11,6 +12,7 @@
     ./modules/networking.nix
     ./modules/shell.nix
     ./modules/mcp.nix
+    ./modules/gpu-nvidia.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this
