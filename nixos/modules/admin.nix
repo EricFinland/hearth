@@ -19,6 +19,12 @@
   };
 
   config = {
+    # This is a single-operator homelab box managed remotely over SSH. Let wheel
+    # sudo without a password so remote `nixos-rebuild` works without a TTY.
+    # Tighten this (set true) if the box ever has multiple users or faces less
+    # trusted access.
+    security.sudo.wheelNeedsPassword = false;
+
     users.users.operator = {
       isNormalUser = true;
       extraGroups = [ "wheel" "networkmanager" ];

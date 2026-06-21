@@ -20,6 +20,14 @@ in
   config = lib.mkIf cfg.enable {
     nixpkgs.config.allowUnfree = true;
 
+    # The RTX 2060 is Turing (compute capability 7.5). Pin CUDA builds to just
+    # that architecture. Without this, ollama-cuda compiles its ggml-cuda kernels
+    # for the full default architecture set (6 to 8 of them), which on this
+    # 6-core laptop takes well over an hour. Pinning to 7.5 cuts it to roughly an
+    # eighth and makes future rebuilds fast.
+    nixpkgs.config.cudaCapabilities = [ "7.5" ];
+    nixpkgs.config.cudaForwardCompat = false;
+
     # Pulls in and loads the NVIDIA kernel driver even without a desktop.
     services.xserver.videoDrivers = [ "nvidia" ];
     hardware.graphics.enable = true;

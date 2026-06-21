@@ -9,6 +9,12 @@
 
   networking.hostName = "hearth-blade";
 
+  # This laptop has a screen. Auto-login the console so the laptop boots
+  # straight into the hearth dashboard (the bash login hook in modules/shell.nix
+  # launches it) instead of sitting at a blank login prompt. SSH still needs the
+  # key. Press q in the dashboard to drop to a shell.
+  services.getty.autologinUser = "operator";
+
   # This laptop has no wired connection in use; it is on WiFi. NetworkManager
   # manages the connection. The actual WiFi profile (with its passphrase) is
   # copied into the installed system at install time rather than committed here,
