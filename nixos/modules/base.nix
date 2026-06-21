@@ -52,4 +52,8 @@
   # Firewall on by default. Per-port and per-interface rules live in
   # modules/networking.nix.
   networking.firewall.enable = true;
+
+  # The whole hearth workflow is flake-based (nixos-rebuild switch --flake ...),
+  # so enable the flakes and nix-command features system wide.
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
 }
