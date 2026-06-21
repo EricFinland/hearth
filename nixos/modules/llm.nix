@@ -31,13 +31,11 @@ in
       # removed services.ollama.acceleration; you pick the package variant
       # instead (ollama-cuda, ollama-rocm, ollama-vulkan, or plain ollama).
       package = pkgs.ollama-cuda;
-      # Store models on the hearth working tree. This maps to the OLLAMA_MODELS
-      # environment variable internally. Using the module option (instead of
-      # overriding the env var by hand) avoids a definition conflict with the
-      # value the ollama module already sets.
-      # TODO (Day 2): confirm the ollama dynamic user can write this path; it
-      # lives outside the unit's default StateDirectory.
-      models = "/var/lib/hearth/models";
+      # Models live in ollama's own managed state directory (/var/lib/ollama).
+      # Pointing this at /var/lib/hearth/models fails: the hardened ollama unit
+      # runs as the ollama user and cannot write that hearth-owned path. Unifying
+      # storage under /var/lib/hearth would need a ReadWritePaths override plus
+      # ownership handoff to the ollama user; left as a future refinement.
     };
 
     # GPU passthrough note:
@@ -54,7 +52,8 @@ in
       after = [ "ollama.service" "network-online.target" ];
       wants = [ "ollama.service" "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
-      environment.OLLAMA_MODELS = "/var/lib/hearth/models";
+      # No OLLAMA_MODELS here: `ollama pull` talks to the running server, which
+      # owns where models are stored. The pull just needs the server reachable.
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
