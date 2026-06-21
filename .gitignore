@@ -7,3 +7,8 @@ secrets/*.yaml
 !secrets/example.yaml
 *.key
 .DS_Store
+
+# docs site build artifacts
+site/node_modules/
+site/dist/
+site/.astro/
