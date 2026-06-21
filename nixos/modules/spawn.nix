@@ -7,16 +7,18 @@ let
   agentPkg = config.hearth.agents.package;
   runner = pkgs.writeShellApplication {
     name = "hearth-run-from-queue";
-    runtimeInputs = [ agentPkg pkgs.python3 pkgs.coreutils ];
+    runtimeInputs = [ agentPkg config.hearth.agents.loopPackage pkgs.python3 pkgs.coreutils ];
     text = ''
       id="$1"
       req="/var/lib/hearth/queue/$id.json"
       [ -f "$req" ] || exit 0
-      model="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('model','llama3.2:3b'))" "$req")"
+      model="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('model','qwen2.5-coder'))" "$req")"
       name="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('name','agent'))" "$req")"
       prompt="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('prompt') or chr(0)*0)" "$req")"
       rm -f "$req"
-      exec hearth-agent --agent-name "$name" --model "$model" "$prompt"
+      ws="/var/lib/hearth/agents/$id"
+      mkdir -p "$ws"
+      exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --agent-name "$name" --model "$model" --workspace "$ws" "$prompt"
     '';
   };
 in
