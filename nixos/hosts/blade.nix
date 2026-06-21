@@ -38,6 +38,16 @@
   home-manager.users.operator = import ../home/operator.nix;
   home-manager.extraSpecialArgs = { inherit plasma-manager; };
 
+  # This laptop is used as an always-on box reached over the network, so it must
+  # never suspend: suspend drops WiFi and SSH. Disable all sleep targets and
+  # ignore the lid switch.
+  systemd.targets.sleep.enable = false;
+  systemd.targets.suspend.enable = false;
+  systemd.targets.hibernate.enable = false;
+  systemd.targets.hybrid-sleep.enable = false;
+  services.logind.lidSwitch = "ignore";
+  services.logind.lidSwitchExternalPower = "ignore";
+
   # The operator admin key, so SSH works on the very first boot.
   hearth.adminKeys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP+Zx34aRKZqWY/dgPc0ARSYB4Gz1PRsV5uibn3ul4tB ericc@vonHallerPatcher"
