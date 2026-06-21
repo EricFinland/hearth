@@ -23,6 +23,10 @@ let
     # Put the ephemeral agent user in the hearth group so it can write the
     # group-writable (2770) agents and runs directories, and nothing else.
     SupplementaryGroups = [ "hearth" ];
+    # Create files group-writable (0660/0770) so the shared audit database in
+    # the setgid runs directory is writable by every hearth-group agent. The
+    # secrets directory stays 0700 (owner only), so agents still cannot read it.
+    UMask = "0007";
     ProtectSystem = "strict";
     ProtectHome = true;
     ReadWritePaths = [ "/var/lib/hearth/agents" "/var/lib/hearth/runs" ];

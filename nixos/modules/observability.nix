@@ -36,6 +36,9 @@ in
         RemainAfterExit = true;
         User = "hearth";
         Group = "hearth";
+        # Create the database group-writable so sandboxed agents (hearth group)
+        # can record their runs and states into it.
+        UMask = "0007";
         ExecStart = "${config.hearth.agents.package}/bin/hearth-agent --init-db --db ${dbPath}";
       };
     };
