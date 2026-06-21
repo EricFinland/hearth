@@ -1,0 +1,175 @@
+---
+title: Architecture
+description: System diagram, module responsibilities, and how hearth is deployed.
+---
+
+For the isolation model and threat analysis, see [Sandboxing & threat model](/hearth/concepts/sandboxing/).
+
+## 1. System diagram
+
+The Mac is the editor. It builds nothing of consequence locally beyond flake
+evaluation. The Proxmox VM is the build and run target.
+
+<svg class="diagram" viewBox="0 0 820 410" role="img" aria-label="hearth system diagram: a Mac editor pushes to GitHub, which the Proxmox VM pulls and rebuilds into eight NixOS modules">
+  <defs>
+    <marker id="arrowS" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="d-arrow-head" d="M0,0 L10,5 L0,10 z" />
+    </marker>
+  </defs>
+
+  <rect class="d-box" x="50" y="24" width="230" height="82" rx="10" />
+  <text class="d-label" x="165" y="58" text-anchor="middle">MacBook Air</text>
+  <text class="d-sub" x="165" y="80" text-anchor="middle">editor only · nix develop</text>
+
+  <rect class="d-box" x="540" y="24" width="230" height="82" rx="10" />
+  <text class="d-label" x="655" y="58" text-anchor="middle">GitHub</text>
+  <text class="d-sub" x="655" y="80" text-anchor="middle">git remote</text>
+
+  <line class="d-arrow" x1="280" y1="65" x2="532" y2="65" marker-end="url(#arrowS)" />
+  <text class="d-arrow-label" x="406" y="55" text-anchor="middle">git push</text>
+
+  <path class="d-arrow" d="M655,106 L655,150" marker-end="url(#arrowS)" />
+  <text class="d-arrow-label" x="665" y="132" text-anchor="start">git pull · flake ref</text>
+
+  <rect class="d-box-accent" x="50" y="150" width="720" height="240" rx="12" />
+  <text class="d-title" x="70" y="182">Proxmox VM: hearth-workstation</text>
+  <text class="d-sub" x="70" y="203">x86_64-linux · GTX 1660 Ti · 32G · nixos-rebuild switch --flake .#workstation</text>
+
+  <g>
+    <rect class="d-chip" x="70" y="222" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="82" y="250">base</text>
+    <text class="d-sub" x="82" y="270">users, ssh</text>
+
+    <rect class="d-chip" x="242" y="222" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="254" y="250">llm</text>
+    <text class="d-sub" x="254" y="270">ollama + cuda</text>
+
+    <rect class="d-chip" x="414" y="222" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="426" y="250">agents</text>
+    <text class="d-sub" x="426" y="270">runtimes, dirs</text>
+
+    <rect class="d-chip" x="586" y="222" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="598" y="250">sandbox</text>
+    <text class="d-sub" x="598" y="270">systemd isolation</text>
+
+    <rect class="d-chip" x="70" y="304" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="82" y="332">observability</text>
+    <text class="d-sub" x="82" y="352">audit, sqlite</text>
+
+    <rect class="d-chip" x="242" y="304" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="254" y="332">networking</text>
+    <text class="d-sub" x="254" y="352">tailscale, fw</text>
+
+    <rect class="d-chip" x="414" y="304" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="426" y="332">shell</text>
+    <text class="d-sub" x="426" y="352">status, prompt</text>
+
+    <rect class="d-chip" x="586" y="304" width="160" height="70" rx="8" />
+    <text class="d-chip-text" x="598" y="332">mcp</text>
+    <text class="d-sub" x="598" y="352">audit gate</text>
+  </g>
+</svg>
+
+## 2. Module responsibilities
+
+- base.nix: locale and timezone, the non-root `hearth` service user, SSH
+  hardening (no passwords, no root login), base CLI tooling, the systemd-boot
+  EFI bootloader, and the firewall switch.
+
+- llm.nix: the Ollama service with CUDA acceleration for the GTX 1660 Ti, a
+  declarative model manifest (`hearth.llm.models`), and a oneshot service that
+  pulls the declared models on activation. Model storage is redirected to
+  /var/lib/hearth/models.
+
+- agents.nix: the /var/lib/hearth directory layout via tmpfiles, the base agent
+  runtimes (Python with uv, Node.js LTS), the hearth-agent runner
+  (agent/hearth_agent.py) packaged onto PATH, a sandboxed demo agent, and the
+  sops-nix integration stub for secret material.
+
+- sandbox.nix: the reusable least-privilege systemd profile that agent services
+  merge in. This is the core isolation mechanism. See
+  [Sandboxing & threat model](/hearth/concepts/sandboxing/).
+
+- observability.nix: the SQLite audit store, a schema initializer that runs on
+  boot (hearth-audit-init, which calls hearth-agent --init-db so the schema has
+  one source of truth), the `hearth-runs` query command, and persistent journald
+  with a 2G cap.
+
+- networking.nix: Tailscale for mesh access, a firewall that trusts the
+  Tailscale interface and opens only SSH and the local Ollama port.
+
+- shell.nix: the login message, the `hearth-status` command, and interactive
+  shell tooling (starship, fzf, zoxide, btop).
+
+- mcp.nix: the MCP audit gate. A declared MCP server with `auditRequired = true`
+  cannot start until an approval file exists. See
+  [MCP audit gate](/hearth/concepts/mcp-audit-gate/).
+
+## 3. Dev and test loop
+
+Rollback is one command. Every switch is a new generation in the bootloader.
+
+<svg class="diagram" viewBox="0 0 820 210" role="img" aria-label="hearth dev loop: edit on Mac, git push, nixos-rebuild switch, hearth-status, test the change; rollback is one command">
+  <defs>
+    <marker id="arrowL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="d-arrow-head" d="M0,0 L10,5 L0,10 z" />
+    </marker>
+  </defs>
+
+  <rect class="d-box" x="16" y="40" width="138" height="58" rx="9" />
+  <text class="d-label" x="85" y="74" text-anchor="middle">edit on Mac</text>
+
+  <rect class="d-box" x="186" y="40" width="138" height="58" rx="9" />
+  <text class="d-label" x="255" y="74" text-anchor="middle">git push</text>
+
+  <rect class="d-box" x="356" y="40" width="138" height="58" rx="9" />
+  <text class="d-label" x="425" y="68" text-anchor="middle">nixos-rebuild</text>
+  <text class="d-sub" x="425" y="86" text-anchor="middle">switch --flake</text>
+
+  <rect class="d-box" x="526" y="40" width="138" height="58" rx="9" />
+  <text class="d-label" x="595" y="74" text-anchor="middle">hearth-status</text>
+
+  <rect class="d-box" x="696" y="40" width="108" height="58" rx="9" />
+  <text class="d-label" x="750" y="74" text-anchor="middle">test it</text>
+
+  <line class="d-arrow" x1="154" y1="69" x2="182" y2="69" marker-end="url(#arrowL)" />
+  <line class="d-arrow" x1="324" y1="69" x2="352" y2="69" marker-end="url(#arrowL)" />
+  <line class="d-arrow" x1="494" y1="69" x2="522" y2="69" marker-end="url(#arrowL)" />
+  <line class="d-arrow" x1="664" y1="69" x2="692" y2="69" marker-end="url(#arrowL)" />
+
+  <rect class="d-chip" x="16" y="140" width="788" height="44" rx="8" />
+  <text class="d-sub" x="32" y="167" text-anchor="start">Bad change? sudo nixos-rebuild switch --rollback returns to the previous generation from the bootloader.</text>
+</svg>
+
+## 4. Image build pipeline
+
+The image build is for the first boot. After that, updates flow through
+`nixos-rebuild switch` against the repo, not by rebuilding images.
+
+<svg class="diagram" viewBox="0 0 820 170" role="img" aria-label="hearth image pipeline: nixos-generators builds a qcow2, which is imported into Proxmox, booted, then updated via nixos-rebuild">
+  <defs>
+    <marker id="arrowP" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="d-arrow-head" d="M0,0 L10,5 L0,10 z" />
+    </marker>
+  </defs>
+
+  <rect class="d-box" x="12" y="50" width="180" height="70" rx="9" />
+  <text class="d-label" x="102" y="80" text-anchor="middle">nixos-generators</text>
+  <text class="d-sub" x="102" y="100" text-anchor="middle">format: qcow-efi</text>
+
+  <rect class="d-box" x="226" y="50" width="170" height="70" rx="9" />
+  <text class="d-label" x="311" y="80" text-anchor="middle">result/</text>
+  <text class="d-sub" x="311" y="100" text-anchor="middle">nixos.qcow2</text>
+
+  <rect class="d-box" x="430" y="50" width="180" height="70" rx="9" />
+  <text class="d-label" x="520" y="80" text-anchor="middle">import to Proxmox</text>
+  <text class="d-sub" x="520" y="100" text-anchor="middle">qm importdisk</text>
+
+  <rect class="d-box-accent" x="644" y="50" width="164" height="70" rx="9" />
+  <text class="d-label" x="726" y="80" text-anchor="middle">boot · ssh</text>
+  <text class="d-sub" x="726" y="100" text-anchor="middle">then rebuild to update</text>
+
+  <line class="d-arrow" x1="192" y1="85" x2="222" y2="85" marker-end="url(#arrowP)" />
+  <line class="d-arrow" x1="396" y1="85" x2="426" y2="85" marker-end="url(#arrowP)" />
+  <line class="d-arrow" x1="610" y1="85" x2="640" y2="85" marker-end="url(#arrowP)" />
+</svg>

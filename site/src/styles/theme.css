@@ -73,3 +73,63 @@ h1#_top,
   font-size: var(--sl-text-lg);
   color: var(--sl-color-gray-2);
 }
+
+/* Theme-aware inline SVG diagrams */
+.diagram {
+  width: 100%;
+  height: auto;
+  margin-block: 1.75rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.75rem;
+  background: var(--sl-color-bg-sidebar);
+  padding: 0.5rem;
+}
+.diagram .d-box {
+  fill: var(--sl-color-gray-6);
+  stroke: var(--sl-color-gray-4);
+  stroke-width: 1.5;
+}
+.diagram .d-box-accent {
+  fill: var(--sl-color-accent-low);
+  stroke: var(--sl-color-accent);
+  stroke-width: 1.5;
+}
+.diagram .d-title {
+  fill: var(--sl-color-white);
+  font-family: var(--sl-font);
+  font-size: 15px;
+  font-weight: 600;
+}
+.diagram .d-label {
+  fill: var(--sl-color-white);
+  font-family: var(--sl-font);
+  font-size: 13px;
+  font-weight: 500;
+}
+.diagram .d-sub {
+  fill: var(--sl-color-gray-2);
+  font-family: var(--sl-font);
+  font-size: 11.5px;
+}
+.diagram .d-chip {
+  fill: var(--sl-color-gray-5);
+}
+.diagram .d-chip-text {
+  fill: var(--sl-color-gray-1);
+  font-family: var(--sl-font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 500;
+}
+.diagram .d-arrow {
+  stroke: var(--sl-color-accent);
+  stroke-width: 2;
+  fill: none;
+}
+.diagram .d-arrow-head {
+  fill: var(--sl-color-accent);
+}
+.diagram .d-arrow-label {
+  fill: var(--sl-color-gray-3);
+  font-family: var(--sl-font);
+  font-size: 11px;
+}
