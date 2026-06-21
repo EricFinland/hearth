@@ -305,7 +305,24 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json")
 
     def _handle_run(self):
-        return self._send(503, "run not enabled yet")
+        req = self._read_json_body()
+        name = (req.get("name") or "agent").replace("/", "_").replace(" ", "_")[:40] or "agent"
+        model = req.get("model") or "llama3.2:3b"
+        prompt = req.get("prompt") or ""
+        if not prompt:
+            return self._send(400, json.dumps({"error": "prompt required"}), "application/json")
+        run_id = "{}-{}".format(name, uuid.uuid4().hex[:8])
+        queue_dir = "/var/lib/hearth/queue"
+        try:
+            os.makedirs(queue_dir, exist_ok=True)
+            tmp = os.path.join(queue_dir, run_id + ".json.tmp")
+            final = os.path.join(queue_dir, run_id + ".json")
+            with open(tmp, "w") as fh:
+                json.dump({"name": name, "model": model, "prompt": prompt}, fh)
+            os.replace(tmp, final)
+        except OSError as exc:
+            return self._send(500, json.dumps({"error": str(exc)}), "application/json")
+        self._send(200, json.dumps({"queued": run_id}), "application/json")
 
     def _serve_static(self, name, ctype):
         fpath = os.path.join(self.static_dir, name)
