@@ -24,10 +24,13 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_DB = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
 DEFAULT_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+OLLAMA_URL = os.environ.get("HEARTH_OLLAMA", "http://127.0.0.1:11434")
 
 # Created by the agent runtime; defined here too so /state and /events work even
 # before any agent has run.
@@ -133,6 +136,15 @@ def parse_meminfo(text):
     return {"used_mb": used // 1024, "total_mb": total // 1024}
 
 
+def parse_models(tags_json_text):
+    """Extract model names from an Ollama /api/tags JSON body."""
+    try:
+        data = json.loads(tags_json_text)
+    except (ValueError, TypeError):
+        return []
+    return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+
+
 def read_stats():
     gpu = None
     if shutil.which("nvidia-smi"):
@@ -151,6 +163,15 @@ def read_stats():
     except OSError:
         mem = None
     return {"gpu": gpu, "mem": mem}
+
+
+def read_models():
+    try:
+        url = OLLAMA_URL.rstrip("/") + "/api/tags"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return parse_models(resp.read().decode())
+    except (urllib.error.URLError, OSError, ValueError):
+        return []
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -185,6 +206,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_events()
         if path == "/stats":
             return self._send(200, json.dumps(read_stats()), "application/json")
+        if path == "/models":
+            return self._send(200, json.dumps({"models": read_models()}), "application/json")
         if path == "/command":
             return self._serve_static("command.html", "text/html; charset=utf-8")
         return self._send(404, "not found")
@@ -234,6 +257,8 @@ def _self_test():
                  "mem_used_mb": 2538, "mem_total_mb": 6144}, g
     m = parse_meminfo("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\n")
     assert m == {"used_mb": 8000, "total_mb": 16000}, m
+    assert parse_models('{"models":[{"name":"llama3.2:3b"},{"name":"mistral:7b"}]}') == ["llama3.2:3b", "mistral:7b"], "parse_models"
+    assert parse_models("not json") == [], "parse_models bad"
     print("hearth-mapd self-test OK")
     return 0
 
