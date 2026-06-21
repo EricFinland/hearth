@@ -56,9 +56,10 @@ in
         NoNewPrivileges = true;
         ProtectHome = true;
         ProtectSystem = "strict";
-        # SQLite in WAL mode writes -wal/-shm sidecars even for readers, so the
-        # runs dir must be writable (the hearth user owns it anyway).
-        ReadWritePaths = [ "/var/lib/hearth/runs" ];
+        # The runs dir holds the audit db (SQLite writes journal sidecars even
+        # for readers). The queue dir is where /run drops launch requests for the
+        # spawn path-watcher to pick up. Both must be writable by this service.
+        ReadWritePaths = [ "/var/lib/hearth/runs" "/var/lib/hearth/queue" ];
         PrivateTmp = true;
       };
     };
