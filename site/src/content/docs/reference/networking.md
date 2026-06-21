@@ -1,6 +1,6 @@
 ---
 title: Networking & remote access
-description: How hearth exposes itself: Tailscale, the firewall, and which ports are open.
+description: How hearth exposes itself with Tailscale, a tight firewall, and a short list of open ports.
 ---
 
 hearth assumes a homelab on a trusted LAN with Tailscale for remote access. The
