@@ -16,12 +16,12 @@
   # profile on boot, which is what keeps SSH reachable after a reboot.
   networking.networkmanager.enable = true;
 
-  # Phase 1: the LLM stack (Ollama + CUDA) and the NVIDIA driver are off, so the
-  # first boot is guaranteed to come up on the network. After SSH is confirmed
-  # post-reboot, enable both and `nixos-rebuild switch`:
-  #   hearth.llm.enable = true;   hearth.gpu.enable = true;
-  hearth.llm.enable = false;
-  hearth.gpu.enable = false;
+  # Phase 2 (enabled 2026-06-21, after the first boot was confirmed reachable):
+  # the NVIDIA driver and the Ollama/CUDA stack are on. The first install booted
+  # with these off so a driver problem could not strand the machine; now that
+  # SSH is confirmed and rollback is available, they are turned on.
+  hearth.llm.enable = true;
+  hearth.gpu.enable = true;
 
   # The operator admin key, so SSH works on the very first boot.
   hearth.adminKeys = [
