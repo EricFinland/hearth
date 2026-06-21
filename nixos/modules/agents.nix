@@ -18,6 +18,15 @@ let
     '';
   };
 
+  # hearth-loop: the tool-using agent loop (Ollama tool-calling, sandbox-aware).
+  hearthLoop = pkgs.writeShellApplication {
+    name = "hearth-loop";
+    runtimeInputs = [ pkgs.python3 ];
+    text = ''
+      exec ${pkgs.python3}/bin/python3 ${agentSrc}/hearth_loop.py "$@"
+    '';
+  };
+
   # hearth-state: inspect or drive agent runtime state (used by the tycoon map).
   hearthState = pkgs.writeShellApplication {
     name = "hearth-state";
@@ -36,10 +45,17 @@ in
       internal = true;
       description = "The hearth-agent runner package, referenced by other modules.";
     };
+
+    loopPackage = lib.mkOption {
+      type = lib.types.package;
+      internal = true;
+      description = "the hearth-loop runner";
+    };
   };
 
   config = lib.mkIf cfg.enable {
     hearth.agents.package = hearthAgent;
+    hearth.agents.loopPackage = hearthLoop;
 
     # Directory layout under /var/lib/hearth, created on boot by tmpfiles.
     # Format: "d  <path>  <mode>  <user>  <group>  <age>"
@@ -68,11 +84,16 @@ in
     '';
 
     # Base agent runtimes plus the hearth-agent runner and hearth-state CLI.
+    # The dev toolchain (git, gcc, gnumake) lets sandboxed agents build code.
     environment.systemPackages = with pkgs; [
       python3
       uv
       nodejs_22
+      git
+      gcc
+      gnumake
       hearthAgent
+      hearthLoop
       hearthState
     ];
 
