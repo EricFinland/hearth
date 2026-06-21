@@ -1,0 +1,64 @@
+---
+title: hearth
+description: A security-first NixOS system for running local LLMs and sandboxed agents.
+template: splash
+hero:
+  tagline: An opinionated, reproducible, security-first Linux system where local LLMs and agents run sandboxed by default, every run is audited, and system state is legible from boot.
+  actions:
+    - text: Get started
+      link: /hearth/installation/choose-your-path/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/EricFinland/hearth
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Get started
+
+<CardGrid>
+  <LinkCard
+    title="Existing NixOS host"
+    description="Already running NixOS? Apply hearth with a single rebuild."
+    href="/hearth/installation/existing-nixos-host/"
+  />
+  <LinkCard
+    title="Fresh install (VM / Proxmox)"
+    description="Build an image and boot hearth in a virtual machine or on bare metal."
+    href="/hearth/installation/fresh-install/"
+  />
+  <LinkCard
+    title="New to Linux?"
+    description="Start with the NixOS primer, then come back and pick a path."
+    href="/hearth/installation/linux-primer/"
+  />
+</CardGrid>
+
+## Why hearth
+
+<CardGrid>
+  <Card title="Sandboxed by default" icon="approve-check">
+    Agents run as ephemeral, isolated systemd processes. They cannot read host
+    secrets or write outside their allowed paths.
+  </Card>
+  <Card title="Every run audited" icon="list-format">
+    Tokens, cost, latency, and errors for every agent run land in a local SQLite
+    store. Query the last 20 runs in one command.
+  </Card>
+  <Card title="Reproducible" icon="seti:nix">
+    The whole OS is one flake. A rebuild brings any NixOS host to the exact
+    defined state, with atomic, bootloader-level rollback.
+  </Card>
+  <Card title="Legible from boot" icon="laptop">
+    A boot dashboard shows model status, system state, and recent runs the moment
+    you log in.
+  </Card>
+</CardGrid>
+
+:::note[Work in progress]
+hearth is under active development. Pages call out which capabilities are built
+today versus on the roadmap. See the [Roadmap](/hearth/project/roadmap/) for status.
+:::

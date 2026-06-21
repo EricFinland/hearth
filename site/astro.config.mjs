@@ -9,9 +9,9 @@ export default defineConfig({
       title: 'hearth',
       description:
         'A security-first NixOS system for running local LLMs and sandboxed agents.',
-      social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/EricFinland/hearth' },
-      ],
+      social: {
+        github: 'https://github.com/EricFinland/hearth',
+      },
       customCss: ['./src/styles/theme.css'],
       head: [
         { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
