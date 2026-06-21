@@ -61,6 +61,35 @@ def chat(base_url, model, messages, tools, timeout=300):
     return data.get("message") or {}, int(data.get("eval_count", 0) or 0)
 
 
+def parse_content_tool_calls(content):
+    """Fallback: extract tool calls a model emitted as JSON text instead of using
+    Ollama's structured tool_calls field (common with local models). Scans the
+    content for JSON objects that name a known tool and returns a list of
+    {name, arguments} dicts."""
+    if not content:
+        return []
+    known = {t["name"] for t in hearth_tools.TOOLS}
+    decoder = json.JSONDecoder()
+    calls = []
+    i = 0
+    while i < len(content):
+        if content[i] != "{":
+            i += 1
+            continue
+        try:
+            obj, end = decoder.raw_decode(content, i)
+        except ValueError:
+            i += 1
+            continue
+        if isinstance(obj, dict) and obj.get("name") in known:
+            args = obj.get("arguments")
+            if not isinstance(args, dict):
+                args = obj.get("parameters") if isinstance(obj.get("parameters"), dict) else {}
+            calls.append({"name": obj["name"], "arguments": args})
+        i = end
+    return calls
+
+
 def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
              ollama_url=DEFAULT_OLLAMA, max_iters=MAX_ITERS, chat_fn=None):
     """Drive the agent loop. chat_fn is injectable for testing."""
@@ -81,8 +110,12 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
             messages.append(msg)
             calls = msg.get("tool_calls") or []
             if not calls:
-                final = msg.get("content", "")
-                break
+                parsed = parse_content_tool_calls(msg.get("content", ""))
+                if parsed:
+                    calls = [{"function": c} for c in parsed]
+                else:
+                    final = msg.get("content", "")
+                    break
             for call in calls:
                 fn = call.get("function") or {}
                 name = fn.get("name", "")
@@ -142,6 +175,23 @@ def _self_test():
     assert final == "done, wrote hi.txt", final
     with open(os.path.join(ws, "hi.txt")) as fh:
         assert fh.read() == "hello world"
+
+    # Fallback path: a model that emits its tool call as JSON text (no structured
+    # tool_calls field) must still get the tool executed.
+    ws2 = tempfile.mkdtemp(prefix="hearth-loop2-")
+    steps2 = [
+        ({"role": "assistant", "content":
+            'sure, doing that:\n{"name": "write_file", "arguments": '
+            '{"path": "c.txt", "content": "yo"}}'}, 1),
+        ({"role": "assistant", "content": "wrote c.txt"}, 1),
+    ]
+    seq2 = iter(steps2)
+    final2, err2 = run_loop("write c.txt", "mock", ws2, db=os.path.join(ws2, "d.db"),
+                            agent_name="t2", chat_fn=lambda msgs: next(seq2))
+    assert err2 is None, err2
+    with open(os.path.join(ws2, "c.txt")) as fh:
+        assert fh.read() == "yo"
+
     print("hearth-loop self-test OK:", final)
     return 0
 
