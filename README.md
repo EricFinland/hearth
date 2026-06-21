@@ -33,10 +33,9 @@ bash scripts/bootstrap.sh
 
 Full documentation lives at **https://ericfinland.github.io/hearth/**.
 
-In-repo sources:
-
-- [Roadmap](docs/ROADMAP.md): the day-by-day build plan.
-- [Architecture](docs/ARCHITECTURE.md): system diagram, module responsibilities, and the threat model.
+The docs site is the canonical source. Its content lives in `site/` and is
+published to GitHub Pages on every push. The Markdown files under `docs/` are
+now short pointers to the live pages.
 
 ## License
 
