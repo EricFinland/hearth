@@ -26,6 +26,8 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_DB = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
@@ -41,6 +43,19 @@ CREATE TABLE IF NOT EXISTS agent_state (
 CREATE TABLE IF NOT EXISTS agent_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, agent_id TEXT NOT NULL,
   state TEXT NOT NULL, detail TEXT
+);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id          INTEGER PRIMARY KEY,
+  agent_name  TEXT,
+  run_id      TEXT,
+  started_at  TEXT,
+  finished_at TEXT,
+  tokens_in   INTEGER,
+  tokens_out  INTEGER,
+  cost_usd    REAL,
+  latency_ms  INTEGER,
+  error       TEXT,
+  model       TEXT
 );
 """
 
@@ -174,6 +189,49 @@ def read_models():
         return []
 
 
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _record_chat_run(db, agent_name, model, tokens_in, tokens_out, latency_ms, error):
+    """Record a chat turn into agent_runs and agent_state so it shows live."""
+    run_id = uuid.uuid4().hex
+    ts = _now_iso()
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(SCHEMA)
+        con.execute(
+            "INSERT INTO agent_runs (agent_name, run_id, started_at, finished_at, "
+            "tokens_in, tokens_out, cost_usd, latency_ms, error, model) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (agent_name, run_id, ts, ts, tokens_in, tokens_out, 0.0, latency_ms, error, model),
+        )
+        con.execute(
+            "INSERT INTO agent_state (agent_id, state, detail, updated_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(agent_id) DO UPDATE SET state=excluded.state, detail=excluded.detail, updated_at=excluded.updated_at",
+            (agent_name, "ERRORED" if error else "DONE", error or (str(tokens_out) + " tokens"), ts),
+        )
+        con.execute(
+            "INSERT INTO agent_events (ts, agent_id, state, detail) VALUES (?,?,?,?)",
+            (ts, agent_name, "ERRORED" if error else "DONE", error or "chat reply"),
+        )
+        con.commit()
+        con.close()
+    except sqlite3.Error:
+        pass
+
+
+def chat_once(base_url, model, messages, timeout=300):
+    """Call Ollama /api/chat (non-streaming). Returns (reply_text, tokens_in, tokens_out)."""
+    body = json.dumps({"model": model, "messages": messages, "stream": False}).encode()
+    req = urllib.request.Request(base_url.rstrip("/") + "/api/chat", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode())
+    reply = (data.get("message") or {}).get("content", "")
+    return reply, int(data.get("prompt_eval_count", 0) or 0), int(data.get("eval_count", 0) or 0)
+
+
 class Handler(BaseHTTPRequestHandler):
     # set by the server factory below
     db = DEFAULT_DB
@@ -211,6 +269,43 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/command":
             return self._serve_static("command.html", "text/html; charset=utf-8")
         return self._send(404, "not found")
+
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        raw = self.rfile.read(length) if length else b""
+        try:
+            return json.loads(raw.decode() or "{}")
+        except ValueError:
+            return {}
+
+    def do_POST(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/chat":
+            return self._handle_chat()
+        if path == "/run":
+            return self._handle_run()
+        return self._send(404, "not found")
+
+    def _handle_chat(self):
+        req = self._read_json_body()
+        model = req.get("model") or "llama3.2:3b"
+        messages = req.get("messages") or []
+        agent_name = req.get("agent_name") or "chat"
+        t0 = time.monotonic()
+        error = None
+        reply, tin, tout = "", 0, 0
+        try:
+            reply, tin, tout = chat_once(OLLAMA_URL, model, messages)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            error = "{}: {}".format(type(exc).__name__, exc)
+        latency = int((time.monotonic() - t0) * 1000)
+        _record_chat_run(self.db, agent_name, model, tin, tout, latency, error)
+        self._send(200, json.dumps({"reply": reply, "error": error,
+                                    "tokens_in": tin, "tokens_out": tout}),
+                   "application/json")
+
+    def _handle_run(self):
+        return self._send(503, "run not enabled yet")
 
     def _serve_static(self, name, ctype):
         fpath = os.path.join(self.static_dir, name)
