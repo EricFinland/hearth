@@ -26,6 +26,12 @@ in
     };
     services.displayManager.defaultSession = "plasmax11";
 
+    # When the graphical desktop is on, SDDM owns the seat. Drop any console
+    # (getty) auto-login so it does not fight the display manager for the screen
+    # or launch the text dashboard behind the KDE session. The dashboard is
+    # still available over SSH.
+    services.getty.autologinUser = lib.mkForce null;
+
     environment.systemPackages = with pkgs; [
       firefox
       kdePackages.konsole
