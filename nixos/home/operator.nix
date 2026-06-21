@@ -66,6 +66,14 @@ in
     ]];
   '';
 
+  xdg.desktopEntries.hearth = {
+    name = "hearth";
+    comment = "Local LLM and agent cockpit";
+    exec = "${pkgs.firefox}/bin/firefox --new-window --class hearth-app --app=http://localhost:8770/command";
+    terminal = false;
+    categories = [ "Utility" "Development" ];
+  };
+
   systemd.user.services.hearth-conky = {
     Unit.Description = "hearth conky desktop readout";
     Install.WantedBy = [ "graphical-session.target" ];
