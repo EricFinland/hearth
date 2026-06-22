@@ -32,8 +32,12 @@ in
     # still available over SSH.
     services.getty.autologinUser = lib.mkForce null;
 
+    # Google Chrome is proprietary (unfree); allow it for the desktop.
+    nixpkgs.config.allowUnfree = true;
+
     environment.systemPackages = with pkgs; [
       firefox
+      google-chrome
       kdePackages.konsole
       kdePackages.dolphin
       kdePackages.kate
