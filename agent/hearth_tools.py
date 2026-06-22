@@ -81,12 +81,31 @@ def tool_list_files(args, workspace):
         return "error: {}".format(exc)
 
 
+def _resolve_cred(name):
+    """Read a stored credential by name from the systemd credentials directory.
+    The credentials file is a simple `NAME=VALUE` per line. Returns "" if not
+    available, so an agent can never read the raw store directly."""
+    creds_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not creds_dir:
+        return ""
+    path = os.path.join(creds_dir, "creds")
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        return ""
+    return ""
+
+
 def tool_http_request(args, workspace):
     url = args.get("url")
     if not url:
         return "error: no url"
     method = (args.get("method") or "GET").upper()
-    headers = args.get("headers") or {}
+    headers = {k: (_resolve_cred(v[5:]) if isinstance(v, str) and v.startswith("cred:") else v)
+               for k, v in (args.get("headers") or {}).items()}
     body = args.get("body")
     data = body.encode() if isinstance(body, str) else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)

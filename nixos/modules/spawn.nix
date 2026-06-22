@@ -36,6 +36,10 @@ lib.mkIf config.hearth.agents.enable {
       # agents + runs). Done before running the agent, so a failed run does not
       # leave a file that would respawn the instance.
       ReadWritePaths = config.hearth.sandbox.profile.ReadWritePaths ++ [ "/var/lib/hearth/queue" ];
+      # Make the user's stored API credentials available to the agent through
+      # systemd's credential channel (readable at $CREDENTIALS_DIRECTORY/creds,
+      # not world-readable). Optional: if the file is absent, the unit still runs.
+      LoadCredential = [ "creds:/var/lib/hearth/secrets/agent-credentials" ];
       ExecStart = "${runner}/bin/hearth-run-from-queue %i";
     };
   };
