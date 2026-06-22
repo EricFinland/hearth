@@ -38,6 +38,7 @@ in
     environment.systemPackages = with pkgs; [
       firefox
       google-chrome
+      discord
       kdePackages.konsole
       kdePackages.dolphin
       kdePackages.kate
