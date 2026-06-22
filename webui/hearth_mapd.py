@@ -34,6 +34,21 @@ DEFAULT_DB = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
 DEFAULT_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 OLLAMA_URL = os.environ.get("HEARTH_OLLAMA", "http://127.0.0.1:11434")
 
+LOCAL_IPS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+API_TOKEN = os.environ.get("HEARTH_API_TOKEN", "")
+
+
+def request_allowed(client_ip, auth_header, token):
+    """Localhost is always allowed (the local cockpit). Remote requests need a
+    bearer token matching the configured one. If no token is configured, remote
+    access is denied (localhost-only)."""
+    if client_ip in LOCAL_IPS:
+        return True
+    if not token:
+        return False
+    expected = "Bearer " + token
+    return bool(auth_header) and auth_header == expected
+
 # Created by the agent runtime; defined here too so /state and /events work even
 # before any agent has run.
 SCHEMA = """
@@ -250,6 +265,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.split("?", 1)[0] != "/healthz" and not request_allowed(
+                self.client_address[0], self.headers.get("Authorization"), API_TOKEN):
+            return self._send(403, "forbidden")
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
             return self._serve_static("index.html", "text/html; charset=utf-8")
@@ -279,6 +297,9 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def do_POST(self):
+        if self.path.split("?", 1)[0] != "/healthz" and not request_allowed(
+                self.client_address[0], self.headers.get("Authorization"), API_TOKEN):
+            return self._send(403, "forbidden")
         path = self.path.split("?", 1)[0]
         if path == "/chat":
             return self._handle_chat()
@@ -371,6 +392,11 @@ def _self_test():
     assert m == {"used_mb": 8000, "total_mb": 16000}, m
     assert parse_models('{"models":[{"name":"llama3.2:3b"},{"name":"mistral:7b"}]}') == ["llama3.2:3b", "mistral:7b"], "parse_models"
     assert parse_models("not json") == [], "parse_models bad"
+    assert request_allowed("127.0.0.1", None, "") is True, "localhost open"
+    assert request_allowed("192.168.1.9", None, "secret") is False, "remote no token"
+    assert request_allowed("192.168.1.9", "Bearer secret", "secret") is True, "remote good token"
+    assert request_allowed("192.168.1.9", "Bearer wrong", "secret") is False, "remote bad token"
+    assert request_allowed("192.168.1.9", None, "") is False, "no token configured -> remote denied"
     print("hearth-mapd self-test OK")
     return 0
 
