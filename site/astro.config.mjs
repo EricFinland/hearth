@@ -18,6 +18,9 @@ export default defineConfig({
         baseUrl: 'https://github.com/EricFinland/hearth/edit/main/site/',
       },
       lastUpdated: true,
+      components: {
+        Footer: './src/components/Footer.astro',
+      },
       customCss: ['./src/styles/theme.css'],
       head: [
         { tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
@@ -66,12 +69,25 @@ export default defineConfig({
           items: [
             { label: 'Runbook', link: '/operations/runbook/' },
             { label: 'Command reference', link: '/operations/commands/' },
+            { label: 'Map dashboard', link: '/operations/map-dashboard/' },
             { label: 'Demo', link: '/operations/demo/' },
+          ],
+        },
+        {
+          label: 'Reference',
+          items: [
+            { label: 'Configuration reference', link: '/reference/configuration/' },
+            { label: 'Hosts & images', link: '/reference/hosts-and-images/' },
+            { label: 'Secrets (sops-nix)', link: '/reference/secrets/' },
+            { label: 'GPU passthrough', link: '/reference/gpu-passthrough/' },
+            { label: 'Networking & remote access', link: '/reference/networking/' },
+            { label: 'Troubleshooting & FAQ', link: '/reference/troubleshooting/' },
           ],
         },
         {
           label: 'Project',
           items: [
+            { label: 'About', link: '/project/about/' },
             { label: 'Roadmap', link: '/project/roadmap/' },
             { label: 'Decision records', link: '/project/decisions/' },
             { label: 'Project status', link: '/project/status/' },

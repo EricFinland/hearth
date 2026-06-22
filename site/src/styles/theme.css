@@ -74,6 +74,19 @@ h1#_top,
   color: var(--sl-color-gray-2);
 }
 
+/* Footer attribution */
+.hearth-footer {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--sl-color-gray-5);
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+  text-align: center;
+}
+.hearth-footer a {
+  color: var(--sl-color-gray-2);
+}
+
 /* Theme-aware inline SVG diagrams */
 .diagram {
   width: 100%;
