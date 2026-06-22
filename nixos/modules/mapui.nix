@@ -60,6 +60,11 @@ in
         # for readers). The queue dir is where /run drops launch requests for the
         # spawn path-watcher to pick up. Both must be writable by this service.
         ReadWritePaths = [ "/var/lib/hearth/runs" "/var/lib/hearth/queue" ];
+        # The API token for remote access is read from a secret file if present
+        # (HEARTH_API_TOKEN). Create /var/lib/hearth/secrets/mapd.env with a line
+        # HEARTH_API_TOKEN=<your token> to enable remote API access; without it,
+        # the API is localhost-only. See docs.
+        EnvironmentFile = [ "-/var/lib/hearth/secrets/mapd.env" ];
         PrivateTmp = true;
       };
     };
