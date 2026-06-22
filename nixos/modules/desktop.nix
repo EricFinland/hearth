@@ -43,6 +43,7 @@ in
       kdePackages.dolphin
       kdePackages.kate
       conky
+      fastfetch
     ];
   };
 }

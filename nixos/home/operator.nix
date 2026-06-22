@@ -58,20 +58,9 @@ in
     };
   };
 
-  xdg.configFile."conky/hearth.conf".text = ''
-    conky.config = {
-      own_window = true, own_window_type = 'desktop', own_window_transparent = true,
-      alignment = 'bottom_left', gap_x = 30, gap_y = 40, update_interval = 2,
-      default_color = 'A0C8FF', font = 'monospace:size=10',
-    };
-    conky.text = [[
-    hearth  ''${nodename}
-    OS      NixOS  ''${kernel}
-    Up      ''${uptime}
-    CPU     ''${cpu}%   RAM ''${mem}/''${memmax}
-    Disk    ''${fs_used /} / ''${fs_size /}
-    ]];
-  '';
+  # The conky desktop dashboard config lives as a plain file so conky's own
+  # ${...} variables do not collide with Nix string interpolation.
+  xdg.configFile."conky/hearth.conf".source = ../modules/desktop-assets/conky.conf;
 
   xdg.desktopEntries.hearth = {
     name = "hearth";
