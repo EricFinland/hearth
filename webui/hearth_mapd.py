@@ -236,6 +236,25 @@ def _record_chat_run(db, agent_name, model, tokens_in, tokens_out, latency_ms, e
         pass
 
 
+def read_runs(db, limit=20):
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(SCHEMA)
+        cur = con.execute(
+            "SELECT started_at, agent_name, model, tokens_in, tokens_out, "
+            "latency_ms, cost_usd, error FROM agent_runs ORDER BY started_at DESC LIMIT ?",
+            (limit,))
+        cols = ["started_at", "agent_name", "model", "tokens_in", "tokens_out",
+                "latency_ms", "cost_usd", "error"]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
 def chat_once(base_url, model, messages, timeout=300):
     """Call Ollama /api/chat (non-streaming). Returns (reply_text, tokens_in, tokens_out)."""
     body = json.dumps({"model": model, "messages": messages, "stream": False}).encode()
@@ -284,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(read_stats()), "application/json")
         if path == "/models":
             return self._send(200, json.dumps({"models": read_models()}), "application/json")
+        if path == "/runs":
+            return self._send(200, json.dumps({"runs": read_runs(self.db)}), "application/json")
         if path == "/command":
             return self._serve_static("command.html", "text/html; charset=utf-8")
         return self._send(404, "not found")
