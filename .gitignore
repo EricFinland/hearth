@@ -12,3 +12,7 @@ secrets/*.yaml
 site/node_modules/
 site/dist/
 site/.astro/
+
+# python bytecode
+__pycache__/
+*.pyc
