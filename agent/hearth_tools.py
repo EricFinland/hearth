@@ -8,11 +8,43 @@ All file/command tools operate inside the per-run workspace and refuse paths tha
 escape it, as defence in depth on top of the systemd sandbox.
 """
 
+import html as _htmlmod
 import json
 import os
 import subprocess
 import urllib.error
 import urllib.request
+from html.parser import HTMLParser
+
+class _TextExtractor(HTMLParser):
+    _SKIP = {"script", "style", "head", "noscript"}
+
+    def __init__(self):
+        super().__init__()
+        self.parts = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0 and data.strip():
+            self.parts.append(data)
+
+
+def _html_to_text(html_text):
+    p = _TextExtractor()
+    try:
+        p.feed(html_text or "")
+    except Exception:  # noqa: BLE001 - malformed HTML must not raise
+        pass
+    return " ".join(" ".join(part.split()) for part in p.parts if part.strip())
+
 
 COMMAND_TIMEOUT = 120
 HTTP_TIMEOUT = 30
@@ -99,6 +131,20 @@ def _resolve_cred(name):
     return ""
 
 
+def tool_web_fetch(args, workspace):
+    url = args.get("url")
+    if not url:
+        return "error: no url"
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (hearth-agent)"})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            raw = resp.read(2000000).decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return "error: {}".format(exc)
+    text = _html_to_text(raw)
+    return text[:MAX_OUT] if text else "(no readable text)"
+
+
 def tool_http_request(args, workspace):
     url = args.get("url")
     if not url:
@@ -150,6 +196,13 @@ TOOLS = [
         "fn": tool_list_files,
     },
     {
+        "name": "web_fetch",
+        "description": "Fetch a web page and return its readable text (HTML tags stripped). Provide url.",
+        "parameters": {"type": "object", "properties": {"url": {"type": "string"}},
+                       "required": ["url"]},
+        "fn": tool_web_fetch,
+    },
+    {
         "name": "http_request",
         "description": "Make an HTTP request to an external API. Provide url, optional method, headers, body.",
         "parameters": {"type": "object", "properties": {
@@ -190,6 +243,12 @@ def _self_test():
     assert "hello" in out and "exit=0" in out, out
     assert "escapes workspace" in execute_tool("write_file", {"path": "../evil", "content": "x"}, ws)
     assert len(ollama_tool_specs()) == len(TOOLS)
+    # web_fetch: the HTML-to-text helper strips tags and collapses whitespace.
+    sample = "<html><head><style>x{}</style><script>var a=1;</script></head>" \
+             "<body><h1>Title</h1><p>Hello   world</p><p>Line two</p></body></html>"
+    txt = _html_to_text(sample)
+    assert "Title" in txt and "Hello world" in txt and "Line two" in txt, txt
+    assert "var a=1" not in txt and "x{}" not in txt, ("script/style stripped", txt)
     print("hearth-tools self-test OK")
     return 0
 
