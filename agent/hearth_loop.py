@@ -132,14 +132,21 @@ def _await_decision(req_id, tool, cargs, auto_allow, control, state, emit, agent
             new = cmd.get("mode")
             if new in permissions.MODES:
                 state["mode"] = new
-                emit({"type": "state", "state": "THINKING", "detail": "mode -> " + new})
                 _emit(agent_name, "THINKING", "mode -> " + new, db)
                 if permissions.decide(new, tool, cargs, auto_allow) == "allow":
                     return True
+                # still gated under the new mode: stay parked, re-advertise so the UI
+                # keeps showing the pending request rather than a stale THINKING.
+                emit({"type": "state", "state": "WAITING_APPROVAL", "detail": tool})
+                _emit(agent_name, "WAITING_APPROVAL", tool, db)
             continue
+        # an omitted id is a wildcard for the current pending request
         if ctype == "decision" and cmd.get("id") in (req_id, None):
             return bool(cmd.get("allow"))
-        # ignore anything else (for example a stray user_message) and keep waiting
+        if ctype == "user_message":
+            emit({"type": "notice", "detail": "message ignored: approval pending"})
+            continue
+        # any other command type is ignored; keep waiting for a decision
 
 
 def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
@@ -200,7 +207,7 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             _emit(agent_name, "TOOL_CALL", name, db)
             result = hearth_tools.execute_tool(name, cargs, workspace)
             emit({"type": "tool_result", "tool": name, "output": result[:MAX_EVENT_OUT]})
-            messages.append({"role": "tool", "content": result[:4000]})
+            messages.append({"role": "tool", "content": result[:MAX_EVENT_OUT]})
     return final, "hit iteration cap ({})".format(max_iters), tokens_out
 
 
@@ -259,9 +266,12 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
         if ctype != "user_message":
             continue
         messages.append({"role": "user", "content": cmd.get("text", "")})
-        final, error, _ = _run_turns(messages, model, workspace, chat_fn, emit,
-                                     control, state, db, agent_name, max_iters,
-                                     auto_allow)
+        t0 = time.monotonic()
+        final, error, tokens_out = _run_turns(messages, model, workspace, chat_fn, emit,
+                                               control, state, db, agent_name, max_iters,
+                                               auto_allow)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        _record(db, agent_name, model, tokens_out, latency_ms, error)
         emit({"type": "turn_done", "error": error, "final": final})
         _emit(agent_name, "ERRORED" if error else "IDLE", error or "ready", db)
     emit({"type": "done", "error": None, "final": ""})
