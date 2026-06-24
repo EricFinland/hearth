@@ -535,6 +535,9 @@ class Handler(BaseHTTPRequestHandler):
         name = (req.get("name") or "agent").replace("/", "_").replace(" ", "_")[:40] or "agent"
         model = req.get("model") or "llama3.2:3b"
         prompt = req.get("prompt") or ""
+        mode = req.get("mode") or "bypass"
+        if mode not in ("plan", "auto", "bypass"):
+            mode = "bypass"
         if not prompt:
             return self._send(400, json.dumps({"error": "prompt required"}), "application/json")
         run_id = "{}-{}".format(name, uuid.uuid4().hex[:8])
@@ -544,7 +547,7 @@ class Handler(BaseHTTPRequestHandler):
             tmp = os.path.join(queue_dir, run_id + ".json.tmp")
             final = os.path.join(queue_dir, run_id + ".json")
             with open(tmp, "w") as fh:
-                json.dump({"name": name, "model": model, "prompt": prompt}, fh)
+                json.dump({"name": name, "model": model, "prompt": prompt, "mode": mode}, fh)
             os.replace(tmp, final)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
@@ -595,7 +598,19 @@ class Handler(BaseHTTPRequestHandler):
             sessions = list(SESSIONS.values())
         for sess in sessions:
             sess.stop()
-        return self._send(200, json.dumps({"stopped": len(sessions)}), "application/json")
+        units = 0
+        try:
+            out = subprocess.run(
+                ["systemctl", "list-units", "--plain", "--no-legend", "hearth-agent@*.service"],
+                capture_output=True, text=True, timeout=5).stdout
+            names = [ln.split()[0] for ln in out.splitlines() if ln.strip()]
+            for name in names:
+                subprocess.run(["sudo", "-n", "systemctl", "stop", name], timeout=10)
+                units += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return self._send(200, json.dumps({"stopped_sessions": len(sessions),
+                                            "stopped_units": units}), "application/json")
 
     def _serve_session_events(self, sid):
         with SESSIONS_LOCK:

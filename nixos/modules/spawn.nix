@@ -14,11 +14,12 @@ let
       [ -f "$req" ] || exit 0
       model="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('model','qwen2.5-coder'))" "$req")"
       name="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('name','agent'))" "$req")"
+      mode="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('mode','bypass'))" "$req")"
       prompt="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('prompt') or chr(0)*0)" "$req")"
       rm -f "$req"
       ws="/var/lib/hearth/agents/$id"
       mkdir -p "$ws"
-      exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --agent-name "$name" --model "$model" --workspace "$ws" "$prompt"
+      exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --agent-name "$id" --model "$model" --mode "$mode" --io db --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
     '';
   };
 in
@@ -29,16 +30,17 @@ lib.mkIf config.hearth.agents.enable {
 
   systemd.services."hearth-agent@" = {
     description = "hearth on-demand agent run %i";
-    serviceConfig = config.hearth.sandbox.profile // {
+    serviceConfig = {
       Type = "oneshot";
-      # Extend the sandbox allow list with the queue dir so the instance can
-      # delete its own request file after reading it (the profile only grants
-      # agents + runs). Done before running the agent, so a failed run does not
-      # leave a file that would respawn the instance.
-      ReadWritePaths = config.hearth.sandbox.profile.ReadWritePaths ++ [ "/var/lib/hearth/queue" ];
-      # Make the user's stored API credentials available to the agent through
-      # systemd's credential channel (readable at $CREDENTIALS_DIRECTORY/creds,
-      # not world-readable). Optional: if the file is absent, the unit still runs.
+      # Background workers are meant to act on the real machine (the user chose
+      # full-machine reach). They run unsandboxed as operator with sudo available,
+      # like the mapd-hosted interactive sessions. Containment is the audit log
+      # plus the approvals queue (auto mode) and the kill switch.
+      User = "operator";
+      Group = "users";
+      NoNewPrivileges = false;
+      # Stored API credentials are still delivered through systemd's credential
+      # channel (readable at $CREDENTIALS_DIRECTORY/creds), not world-readable.
       LoadCredential = [ "creds:/var/lib/hearth/secrets/agent-credentials" ];
       ExecStart = "${runner}/bin/hearth-run-from-queue %i";
     };
