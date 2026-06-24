@@ -19,7 +19,8 @@ import sys
 
 MODES = ("plan", "auto", "bypass")
 
-# Risk class per tool. Unknown tools are treated as dangerous (fail closed).
+# Risk class per tool: "safe" (reads), "edit" (file writes), "dangerous"
+# (shell, network, sudo). Unknown tools are treated as dangerous (fail closed).
 RISK = {
     "read_file": "safe",
     "list_files": "safe",
@@ -43,9 +44,10 @@ def decide(mode, tool, args=None, auto_allow=()):
 
     auto_allow is an optional collection of command heads (for example
     {'git', 'ls'}) that run automatically even in auto mode. Empty by default.
+    auto_allow only applies to run_command command heads; it does not affect other dangerous tools such as http_request.
     """
     if mode not in MODES:
-        return "gate"
+        return "gate"  # invalid modes fail safe by gating
     risk = risk_of(tool)
     if mode == "bypass":
         return "allow"
