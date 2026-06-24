@@ -427,6 +427,8 @@ def main(argv=None):
     if a.self_test:
         return _self_test()
     auto_allow = tuple(x for x in a.auto_allow.split(",") if x)
+    if a.session and a.goal:
+        p.error("--session does not take a positional goal; send goals via stdin")
     if a.session:
         run_session(a.model, a.workspace, db=a.db, agent_name=a.agent_name,
                     ollama_url=a.ollama_url, max_iters=a.max_iters, mode=a.mode,
