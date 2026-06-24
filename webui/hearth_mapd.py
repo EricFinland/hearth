@@ -351,6 +351,8 @@ class Handler(BaseHTTPRequestHandler):
     # set by the server factory below
     db = DEFAULT_DB
     static_dir = DEFAULT_STATIC
+    loop_cmd = "hearth-loop"
+    ollama_url = OLLAMA_URL
 
     def log_message(self, *args):
         pass  # quiet; journald already captures the unit's output
@@ -388,6 +390,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"runs": read_runs(self.db)}), "application/json")
         if path == "/command":
             return self._serve_static("command.html", "text/html; charset=utf-8")
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
+            return self._serve_session_events(parts[1])
         return self._send(404, "not found")
 
     def _read_json_body(self):
@@ -407,6 +412,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_chat()
         if path == "/run":
             return self._handle_run()
+        if path == "/session":
+            return self._handle_new_session()
+        if path == "/stop-all":
+            return self._handle_stop_all()
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "session" and parts[2] == "send":
+            return self._handle_session_send(parts[1])
         return self._send(404, "not found")
 
     def _handle_chat(self):
@@ -446,6 +458,70 @@ class Handler(BaseHTTPRequestHandler):
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
         self._send(200, json.dumps({"queued": run_id}), "application/json")
+
+    def _handle_new_session(self):
+        req = self._read_json_body()
+        name = (req.get("name") or "session").replace("/", "_").replace(" ", "_")[:40] or "session"
+        model = req.get("model") or "llama3.2:3b"
+        mode = req.get("mode") or "auto"
+        if mode not in ("plan", "auto", "bypass"):
+            mode = "auto"
+        task = req.get("task") or ""
+        sid = "{}-{}".format(name, uuid.uuid4().hex[:8])
+        workspace = "/var/lib/hearth/agents/" + sid
+        try:
+            sess = spawn_session(self.loop_cmd, sid, model, mode, workspace,
+                                 self.db, self.ollama_url)
+        except OSError as exc:
+            return self._send(500, json.dumps({"error": str(exc)}), "application/json")
+        with SESSIONS_LOCK:
+            SESSIONS[sid] = sess
+        if task:
+            sess.send({"type": "user_message", "text": task})
+        return self._send(200, json.dumps({"id": sid, "mode": mode, "model": model}),
+                          "application/json")
+
+    def _handle_session_send(self, sid):
+        req = self._read_json_body()
+        with SESSIONS_LOCK:
+            sess = SESSIONS.get(sid)
+        if sess is None:
+            return self._send(404, json.dumps({"error": "no such session"}), "application/json")
+        ok = sess.send(req)
+        return self._send(200, json.dumps({"sent": ok}), "application/json")
+
+    def _handle_stop_all(self):
+        with SESSIONS_LOCK:
+            sessions = list(SESSIONS.values())
+        for sess in sessions:
+            sess.stop()
+        return self._send(200, json.dumps({"stopped": len(sessions)}), "application/json")
+
+    def _serve_session_events(self, sid):
+        with SESSIONS_LOCK:
+            sess = SESSIONS.get(sid)
+        if sess is None:
+            return self._send(404, json.dumps({"error": "no such session"}), "application/json")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        idx = 0
+        try:
+            while True:
+                evs, closed = sess.snapshot(idx)
+                for ev in evs:
+                    idx += 1
+                    self.wfile.write(("data: " + json.dumps(ev) + "\n\n").encode())
+                self.wfile.flush()
+                if closed and idx >= len(sess.events):
+                    with SESSIONS_LOCK:
+                        SESSIONS.pop(sid, None)
+                    return
+                time.sleep(0.2)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
 
     def _serve_static(self, name, ctype):
         fpath = os.path.join(self.static_dir, name)
@@ -535,9 +611,10 @@ def _self_test():
     return 0
 
 
-def make_server(host, port, db, static_dir):
+def make_server(host, port, db, static_dir, loop_cmd="hearth-loop"):
     Handler.db = db
     Handler.static_dir = static_dir
+    Handler.loop_cmd = loop_cmd
     return ThreadingHTTPServer((host, port), Handler)
 
 
@@ -547,6 +624,8 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8770)
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--static-dir", default=DEFAULT_STATIC)
+    parser.add_argument("--loop-cmd", default=os.environ.get("HEARTH_LOOP_CMD", "hearth-loop"),
+                        help="command used to spawn an interactive agent loop")
     parser.add_argument("--self-test", action="store_true",
                         help="run the parser self-test and exit")
     args = parser.parse_args(argv)
@@ -554,7 +633,7 @@ def main(argv=None):
     if args.self_test:
         return _self_test()
 
-    server = make_server(args.host, args.port, args.db, args.static_dir)
+    server = make_server(args.host, args.port, args.db, args.static_dir, args.loop_cmd)
     print("hearth-mapd serving on http://{}:{} (db={})".format(args.host, args.port, args.db))
     try:
         server.serve_forever()
