@@ -314,6 +314,22 @@ def decide_action(db, action_id, allow):
         return False
 
 
+def deny_all_pending(db):
+    """Deny every still-undecided approval request (used by the kill switch so a
+    stopped worker's request does not linger in the queue). Returns the count."""
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        try:
+            con.executescript(PENDING_SCHEMA)
+            cur = con.execute("UPDATE pending_actions SET decision='deny' WHERE decision IS NULL")
+            con.commit()
+            return cur.rowcount
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return 0
+
+
 def read_transcript(db, agent_id, limit=200):
     """Transcript events for one background worker, oldest first."""
     if not os.path.exists(db):
@@ -611,8 +627,10 @@ class Handler(BaseHTTPRequestHandler):
                     units += 1
         except (OSError, subprocess.SubprocessError):
             pass
+        cleared = deny_all_pending(self.db)
         return self._send(200, json.dumps({"stopped_sessions": len(sessions),
-                                            "stopped_units": units}), "application/json")
+                                            "stopped_units": units,
+                                            "cleared_pending": cleared}), "application/json")
 
     def _serve_session_events(self, sid):
         with SESSIONS_LOCK:
