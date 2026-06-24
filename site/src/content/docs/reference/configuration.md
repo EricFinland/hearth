@@ -143,3 +143,28 @@ Opens the map port on the firewall so other devices on your network can view it.
 For a tighter setup, set it `false` and reach the map over Tailscale only (the
 `tailscale0` interface is already trusted). See
 [Networking & remote access](/hearth/reference/networking/).
+
+## hearth.desktop.enable
+
+- **Type:** boolean
+- **Default:** `false`
+- **Module:** `nixos/modules/desktop.nix`
+
+Enables an optional KDE Plasma 6 desktop (SDDM, auto-login) for hosts that have a
+screen. Off by default; a headless VM does not need it. See
+[Desktop](/hearth/reference/desktop/).
+
+## hearth.desktop.autoLoginUser
+
+- **Type:** string
+- **Default:** `"operator"`
+- **Module:** `nixos/modules/desktop.nix`
+
+The user auto-logged into the Plasma session at boot.
+
+## A note on the agent runtime and spawn
+
+The agent runtime (`hearth.agents.enable`, default `true`) also provides the
+tool-using loop (`hearth-loop`) and the on-demand spawn queue that the command
+center uses. Those are wired automatically when the runtime is enabled; there are
+no extra options to set. See [Agent engine](/hearth/concepts/agent-engine/).

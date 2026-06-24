@@ -47,6 +47,20 @@ hearth-agent --init-db
 It is plain Python with no third-party dependencies, so the audit path and
 `--self-test` work even where Ollama is not running.
 
+### `hearth-loop`
+
+The tool-using agent loop. Give a model a goal and a workspace; it calls tools
+(run commands, read and write files, make HTTP requests) until the goal is done
+or it hits the iteration cap. The run is sandboxed and audited. See
+[Agent engine](/hearth/concepts/agent-engine/).
+
+```sh
+hearth-loop --model qwen2.5-coder --agent-name builder --workspace DIR "GOAL"
+
+# run the loop against a mock model, no Ollama needed
+hearth-loop --self-test
+```
+
 ### `hearth-dashboard`
 
 A Textual TUI showing system state, model status, spend, and recent runs. It
