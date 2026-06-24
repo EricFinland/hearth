@@ -233,12 +233,12 @@ async function refreshPending(){
     card.style.display=list.length?"block":"none";
     document.getElementById("pendBody").innerHTML=list.map(p=>
       `<div style="border:1px solid #6a5a1a;background:#241f0e;border-radius:6px;padding:6px;margin:4px 0;">
-        <div><b style="color:#f0a030">${(p.agent_id||"").replace(/</g,"&lt;")}</b> wants <b>${(p.tool||"").replace(/</g,"&lt;")}</b> <small style="color:#8a93a0">(${(p.risk||"").replace(/</g,"&lt;")})</small></div>
-        <pre style="white-space:pre-wrap;margin:4px 0;color:#cfe6ff">${JSON.stringify(p.args).replace(/</g,"&lt;")}</pre>
+        <div><b style="color:#f0a030">${esc(p.agent_id)}</b> wants <b>${esc(p.tool)}</b> <small style="color:#8a93a0">(${esc(p.risk)})</small></div>
+        <pre style="white-space:pre-wrap;margin:4px 0;color:#cfe6ff">${esc(JSON.stringify(p.args))}</pre>
         <button onclick="decideAction(${p.id},true)" style="background:#1c6;color:#04150c;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;">approve</button>
         <button onclick="decideAction(${p.id},false)" style="background:#a33;color:#fff;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;margin-left:6px;">deny</button>
       </div>`).join("");
-  }catch(e){}
+  }catch(e){console.warn("pending refresh failed",e);}
 }
 function decideAction(id,allow){
   fetch("/decide",{method:"POST",headers:{"Content-Type":"application/json"},
