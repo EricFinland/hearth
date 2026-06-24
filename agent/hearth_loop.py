@@ -248,17 +248,19 @@ def make_db_transport(db, agent_id, poll_interval=0.5):
     def emit(event):
         try:
             con = _con()
-            con.execute(
-                "INSERT INTO agent_transcript (agent_id, ts, event) VALUES (?,?,?)",
-                (agent_id, _now_iso(), json.dumps(event)))
-            if event.get("type") == "tool_request":
+            try:
                 con.execute(
-                    "INSERT INTO pending_actions (agent_id, req_id, tool, args, risk, created_at) "
-                    "VALUES (?,?,?,?,?,?)",
-                    (agent_id, event.get("id"), event.get("tool"),
-                     json.dumps(event.get("args") or {}), event.get("risk"), _now_iso()))
-            con.commit()
-            con.close()
+                    "INSERT INTO agent_transcript (agent_id, ts, event) VALUES (?,?,?)",
+                    (agent_id, _now_iso(), json.dumps(event)))
+                if event.get("type") == "tool_request":
+                    con.execute(
+                        "INSERT INTO pending_actions (agent_id, req_id, tool, args, risk, created_at) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (agent_id, event.get("id"), event.get("tool"),
+                         json.dumps(event.get("args") or {}), event.get("risk"), _now_iso()))
+                con.commit()
+            finally:
+                con.close()
         except sqlite3.Error:
             pass
 
@@ -268,12 +270,14 @@ def make_db_transport(db, agent_id, poll_interval=0.5):
             decision = None
             try:
                 con = _con()
-                row = con.execute(
-                    "SELECT decision FROM pending_actions "
-                    "WHERE agent_id=? AND req_id=? ORDER BY id DESC LIMIT 1",
-                    (agent_id, req_id)).fetchone()
-                con.close()
-                decision = row[0] if row else None
+                try:
+                    row = con.execute(
+                        "SELECT decision FROM pending_actions "
+                        "WHERE agent_id=? AND req_id=? ORDER BY id DESC LIMIT 1",
+                        (agent_id, req_id)).fetchone()
+                    decision = row[0] if row else None
+                finally:
+                    con.close()
             except sqlite3.Error:
                 decision = None
             if decision:
