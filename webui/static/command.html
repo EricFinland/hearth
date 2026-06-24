@@ -8,7 +8,7 @@
     font-family: ui-monospace, Menlo, Consolas, monospace; overflow:hidden; }
   #bg { position:fixed; inset:0; z-index:0; }
   #grid { position:fixed; inset:0; z-index:1; display:grid;
-    grid-template-columns: 320px 1fr; grid-template-rows: auto auto 1fr 180px; gap:14px; padding:14px; }
+    grid-template-columns: 320px 1fr; grid-template-rows: auto auto 1fr 140px auto; gap:14px; padding:14px; }
   .card { background:rgba(8,14,24,0.62); border:1px solid #16324f; border-radius:10px;
     padding:10px 12px; backdrop-filter: blur(3px); overflow:auto; }
   .title { color:#5fd0ff; text-transform:uppercase; letter-spacing:.08em; font-size:12px; margin-bottom:8px; }
@@ -73,6 +73,10 @@
     </div>
   </div>
   <div class="card" id="activity"><div class="title">activity</div><div id="actBody"></div></div>
+  <div class="card" id="pending" style="grid-column:1/3;grid-row:5/6;display:none;">
+    <div class="title">pending approvals</div>
+    <div id="pendBody"></div>
+  </div>
 </div>
 <script>
 const STATE_ICONS={SPAWNING:"*",IDLE:"z",THINKING:"?",TOOL_CALL:"+",WAITING_IO:"~",WAITING_APPROVAL:"!?",ERRORED:"!",DONE:"#"};
@@ -135,7 +139,8 @@ document.getElementById("agLaunch").onclick=async()=>{
   const msg=document.getElementById("agMsg");
   if(!prompt){msg.textContent="enter a task";return;}
   msg.textContent="launching...";
-  try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,model,prompt})});
+  const mode=document.getElementById("agMode").value;
+  try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,model,prompt,mode})});
     const j=await r.json();
     if(j.queued){msg.textContent="launched "+j.queued+" (watch the map)";document.getElementById("agTask").value="";}
     else msg.textContent="error: "+(j.error||"unknown");}
@@ -219,4 +224,25 @@ sessEl("sessMode").onchange=()=>{
 };
 sessEl("sessStop").onclick=()=>{if(sessionId)fetch(`/session/${sessionId}/send`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"stop"})});};
 sessEl("sessClose").onclick=()=>{if(sessionES)sessionES.close(); sessionES=null; sessionId=null; showSession(false);};
+// ---- background-worker approvals queue ----
+async function refreshPending(){
+  try{
+    const j=await (await fetch("/pending")).json();
+    const list=j.pending||[];
+    const card=document.getElementById("pending");
+    card.style.display=list.length?"block":"none";
+    document.getElementById("pendBody").innerHTML=list.map(p=>
+      `<div style="border:1px solid #6a5a1a;background:#241f0e;border-radius:6px;padding:6px;margin:4px 0;">
+        <div><b style="color:#f0a030">${(p.agent_id||"").replace(/</g,"&lt;")}</b> wants <b>${(p.tool||"").replace(/</g,"&lt;")}</b> <small style="color:#8a93a0">(${(p.risk||"").replace(/</g,"&lt;")})</small></div>
+        <pre style="white-space:pre-wrap;margin:4px 0;color:#cfe6ff">${JSON.stringify(p.args).replace(/</g,"&lt;")}</pre>
+        <button onclick="decideAction(${p.id},true)" style="background:#1c6;color:#04150c;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;">approve</button>
+        <button onclick="decideAction(${p.id},false)" style="background:#a33;color:#fff;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;margin-left:6px;">deny</button>
+      </div>`).join("");
+  }catch(e){}
+}
+function decideAction(id,allow){
+  fetch("/decide",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({id,allow})}).then(()=>refreshPending());
+}
+setInterval(refreshPending,2500); refreshPending();
 </script></body></html>
