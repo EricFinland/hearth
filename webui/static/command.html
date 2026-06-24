@@ -49,7 +49,7 @@
   <div class="card" id="activity"><div class="title">activity</div><div id="actBody"></div></div>
 </div>
 <script>
-const STATE_ICONS={SPAWNING:"*",IDLE:"z",THINKING:"?",TOOL_CALL:"+",WAITING_IO:"~",ERRORED:"!",DONE:"#"};
+const STATE_ICONS={SPAWNING:"*",IDLE:"z",THINKING:"?",TOOL_CALL:"+",WAITING_IO:"~",WAITING_APPROVAL:"!?",ERRORED:"!",DONE:"#"};
 const bg=document.getElementById("bg"),bx=bg.getContext("2d");
 let parts=[];
 function sizeBg(){bg.width=innerWidth;bg.height=innerHeight;

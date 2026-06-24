@@ -39,6 +39,7 @@ STATES = [
     "THINKING",   # an LLM call is in flight
     "TOOL_CALL",  # executing a tool / command
     "WAITING_IO", # blocked on external I/O (network, disk, another agent)
+    "WAITING_APPROVAL",  # paused, needs the user to approve or deny a tool
     "ERRORED",    # last step failed
     "DONE",       # finished, walking off
 ]
@@ -52,6 +53,7 @@ STATE_ICONS = {
     "THINKING": "💭",
     "TOOL_CALL": "🔧",
     "WAITING_IO": "⏳",
+    "WAITING_APPROVAL": "✋",
     "ERRORED": "❗",
     "DONE": "✅",
 }
@@ -200,10 +202,23 @@ def _sim(n, db):
     return 0
 
 
+def _self_test():
+    assert "WAITING_APPROVAL" in STATES, "WAITING_APPROVAL missing from STATES"
+    assert "WAITING_APPROVAL" in STATE_ICONS, "WAITING_APPROVAL missing from STATE_ICONS"
+    import tempfile, os as _os
+    db = _os.path.join(tempfile.mkdtemp(prefix="hearth-state-"), "s.db")
+    emit_state("a1", "WAITING_APPROVAL", "needs approval: run_command", db=db)
+    snap = {r["agent_id"]: r for r in snapshot(db)}
+    assert snap["a1"]["state"] == "WAITING_APPROVAL", snap
+    print("hearth-state self-test OK")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="hearth-state")
     parser.add_argument("--db", default=DEFAULT_DB)
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    parser.add_argument("--self-test", action="store_true")
+    sub = parser.add_subparsers(dest="cmd", required=False)
 
     p_emit = sub.add_parser("emit", help="record one transition")
     p_emit.add_argument("agent_id")
@@ -216,6 +231,9 @@ def main(argv=None):
     p_sim.add_argument("n", nargs="?", type=int, default=3)
 
     args = parser.parse_args(argv)
+
+    if getattr(args, "self_test", False):
+        return _self_test()
 
     if args.cmd == "emit":
         emit_state(args.agent_id, args.state, args.detail, db=args.db)
