@@ -297,15 +297,19 @@ def read_pending(db):
 
 
 def decide_action(db, action_id, allow):
-    """Mark a pending action allow/deny so the waiting worker proceeds."""
+    """Mark a pending action allow/deny so the waiting worker proceeds. Returns
+    True only if a matching pending row was actually updated (a missing/unknown id
+    returns False rather than a misleading success)."""
     try:
         con = sqlite3.connect(db, timeout=10)
-        con.executescript(PENDING_SCHEMA)
-        con.execute("UPDATE pending_actions SET decision=? WHERE id=?",
-                    ("allow" if allow else "deny", action_id))
-        con.commit()
-        con.close()
-        return True
+        try:
+            con.executescript(PENDING_SCHEMA)
+            cur = con.execute("UPDATE pending_actions SET decision=? WHERE id=?",
+                              ("allow" if allow else "deny", action_id))
+            con.commit()
+            return cur.rowcount > 0
+        finally:
+            con.close()
     except sqlite3.Error:
         return False
 
