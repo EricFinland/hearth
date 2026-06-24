@@ -26,6 +26,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -257,6 +258,80 @@ def read_runs(db, limit=20):
         return []
 
 
+PENDING_SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_transcript (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL, ts TEXT NOT NULL, event TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pending_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL, req_id TEXT NOT NULL, tool TEXT, args TEXT, risk TEXT,
+  created_at TEXT NOT NULL, decision TEXT
+);
+"""
+
+
+def read_pending(db):
+    """Undecided approval requests, oldest first."""
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(PENDING_SCHEMA)
+        cur = con.execute(
+            "SELECT id, agent_id, req_id, tool, args, risk, created_at FROM pending_actions "
+            "WHERE decision IS NULL ORDER BY id")
+        cols = ["id", "agent_id", "req_id", "tool", "args", "risk", "created_at"]
+        rows = []
+        for r in cur.fetchall():
+            d = dict(zip(cols, r))
+            try:
+                d["args"] = json.loads(d["args"] or "{}")
+            except ValueError:
+                d["args"] = {}
+            rows.append(d)
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
+def decide_action(db, action_id, allow):
+    """Mark a pending action allow/deny so the waiting worker proceeds."""
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(PENDING_SCHEMA)
+        con.execute("UPDATE pending_actions SET decision=? WHERE id=?",
+                    ("allow" if allow else "deny", action_id))
+        con.commit()
+        con.close()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def read_transcript(db, agent_id, limit=200):
+    """Transcript events for one background worker, oldest first."""
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(PENDING_SCHEMA)
+        cur = con.execute(
+            "SELECT ts, event FROM agent_transcript WHERE agent_id=? ORDER BY id LIMIT ?",
+            (agent_id, limit))
+        rows = []
+        for ts, ev in cur.fetchall():
+            try:
+                rows.append({"ts": ts, "event": json.loads(ev)})
+            except ValueError:
+                pass
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
 def chat_once(base_url, model, messages, timeout=300):
     """Call Ollama /api/chat (non-streaming). Returns (reply_text, tokens_in, tokens_out)."""
     body = json.dumps({"model": model, "messages": messages, "stream": False}).encode()
@@ -391,6 +466,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"runs": read_runs(self.db)}), "application/json")
         if path == "/command":
             return self._serve_static("command.html", "text/html; charset=utf-8")
+        if path == "/pending":
+            return self._send(200, json.dumps({"pending": read_pending(self.db)}), "application/json")
+        if path == "/transcript":
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            agent = (qs.get("agent") or [""])[0]
+            return self._send(200, json.dumps({"transcript": read_transcript(self.db, agent)}),
+                              "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
@@ -417,6 +499,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_new_session()
         if path == "/stop-all":
             return self._handle_stop_all()
+        if path == "/decide":
+            req = self._read_json_body()
+            ok = decide_action(self.db, req.get("id"), bool(req.get("allow")))
+            return self._send(200, json.dumps({"ok": ok}), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "send":
             return self._handle_session_send(parts[1])
@@ -617,6 +703,21 @@ def _self_test():
         _time.sleep(0.05)
     assert got_echo and "ping" in got_echo.get("got", ""), ("expected echo of input", sess.snapshot(0))
     sess.stop()
+    # --- pending/transcript DB helpers: seed rows and read them back.
+    import tempfile as _tf
+    pdb = os.path.join(_tf.mkdtemp(prefix="hearth-mapd-pend-"), "audit.db")
+    con = sqlite3.connect(pdb, timeout=10)
+    con.executescript(PENDING_SCHEMA)
+    con.execute("INSERT INTO agent_transcript (agent_id, ts, event) VALUES (?,?,?)",
+                ("bg1", _now_iso(), json.dumps({"type": "message", "content": "hi"})))
+    con.execute("INSERT INTO pending_actions (agent_id, req_id, tool, args, risk, created_at) "
+                "VALUES (?,?,?,?,?,?)", ("bg1", "r1", "run_command", "{}", "dangerous", _now_iso()))
+    con.commit(); con.close()
+    assert read_pending(pdb) and read_pending(pdb)[0]["tool"] == "run_command", read_pending(pdb)
+    assert decide_action(pdb, read_pending(pdb)[0]["id"], True) is True
+    assert read_pending(pdb) == [], "decided action should leave the pending list"
+    tr = read_transcript(pdb, "bg1")
+    assert tr and tr[0]["event"]["type"] == "message", tr
     print("hearth-mapd self-test OK")
     return 0
 
