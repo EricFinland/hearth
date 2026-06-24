@@ -41,11 +41,37 @@
     <div class="title">launch agent</div>
     <input id="agName" placeholder="name (e.g. researcher)" style="width:100%;margin-bottom:4px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;box-sizing:border-box;" />
     <select id="agModel" style="width:100%;margin-bottom:4px;"></select>
+    <select id="agMode" style="width:100%;margin-bottom:4px;">
+      <option value="plan">plan (look only)</option>
+      <option value="auto" selected>auto (ask on risky)</option>
+      <option value="bypass">bypass (no prompts)</option>
+    </select>
     <textarea id="agTask" placeholder="task for the agent..." style="width:100%;height:60px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;box-sizing:border-box;"></textarea>
-    <button id="agLaunch" style="margin-top:4px;background:#1c6;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">launch</button>
+    <div style="display:flex;gap:6px;margin-top:4px;">
+      <button id="agSession" style="flex:1;background:#1c6;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">open session</button>
+      <button id="agLaunch" style="flex:1;background:#16324f;color:#cfe6ff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">run in background</button>
+    </div>
     <div id="agMsg" style="font-size:12px;margin-top:6px;"></div>
   </div>
   <div class="card" id="map"><div class="title">agents</div><div id="mapBody"></div></div>
+  <div class="card" id="session" style="display:none;grid-column:2/3;grid-row:1/4;flex-direction:column;">
+    <div class="title" style="display:flex;justify-content:space-between;align-items:center;">
+      <span>session <span id="sessId" style="color:#8a93a0;"></span></span>
+      <span>
+        <select id="sessMode" style="background:#0e2236;border:1px solid #16324f;color:#cfe6ff;border-radius:6px;padding:2px;">
+          <option value="plan">plan</option><option value="auto">auto</option><option value="bypass">bypass</option>
+        </select>
+        <button id="sessStop" style="background:#a33;color:#fff;border:0;border-radius:6px;padding:4px 10px;cursor:pointer;">stop</button>
+        <button id="sessClose" style="background:#16324f;color:#cfe6ff;border:0;border-radius:6px;padding:4px 10px;cursor:pointer;">close</button>
+      </span>
+    </div>
+    <div id="sessBanner" style="display:none;background:#5a1414;color:#ffd7d7;padding:4px 8px;border-radius:6px;margin-bottom:6px;font-size:12px;">BYPASS MODE: this agent runs every action without asking.</div>
+    <div id="sessLog" style="flex:1;overflow:auto;font-size:12px;line-height:1.5;"></div>
+    <div style="display:flex;gap:6px;margin-top:6px;">
+      <input id="sessInput" placeholder="send a follow-up to the agent..." style="flex:1;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;" />
+      <button id="sessSend" style="background:#16324f;color:#cfe6ff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">send</button>
+    </div>
+  </div>
   <div class="card" id="activity"><div class="title">activity</div><div id="actBody"></div></div>
 </div>
 <script>
@@ -110,6 +136,74 @@ document.getElementById("agLaunch").onclick=async()=>{
   if(!prompt){msg.textContent="enter a task";return;}
   msg.textContent="launching...";
   try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,model,prompt})});
-    const j=await r.json();msg.textContent=j.queued?("launched "+j.queued+" (watch the map)"):("error: "+(j.error||"unknown"));}
+    const j=await r.json();
+    if(j.queued){msg.textContent="launched "+j.queued+" (watch the map)";document.getElementById("agTask").value="";}
+    else msg.textContent="error: "+(j.error||"unknown");}
   catch(e){msg.textContent="error: "+e;}};
+// ---- interactive session console ----
+let sessionES=null, sessionId=null;
+const sessEl=id=>document.getElementById(id);
+function sessAppend(html){const l=sessEl("sessLog");l.innerHTML+=html;l.scrollTop=l.scrollHeight;}
+function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+function showSession(on){
+  sessEl("session").style.display=on?"flex":"none";
+  document.getElementById("map").style.display=on?"none":"";
+}
+function decide(id,allow){
+  fetch(`/session/${sessionId}/send`,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({type:"decision",id,allow})});
+}
+function renderEvent(d){
+  if(d.type==="message"){sessAppend(`<div><b style="color:#6fcf7f">agent:</b> ${esc(d.content)}</div>`);}
+  else if(d.type==="tool_result"){
+    const tag=d.denied?'<span style="color:#e06a6a">denied</span>':'<span style="color:#5fd0ff">ran</span>';
+    sessAppend(`<div style="opacity:.85">${tag} <b>${esc(d.tool)}</b><pre style="white-space:pre-wrap;margin:2px 0;color:#9fb6cc">${esc(d.output||"")}</pre></div>`);}
+  else if(d.type==="tool_request"){
+    sessAppend(`<div id="req_${d.id}" style="border:1px solid #6a5a1a;background:#241f0e;border-radius:6px;padding:6px;margin:4px 0;">
+      <div><b style="color:#f0a030">approve?</b> <b>${esc(d.tool)}</b> <small style="color:#8a93a0">(${esc(d.risk)})</small></div>
+      <pre style="white-space:pre-wrap;margin:4px 0;color:#cfe6ff">${esc(JSON.stringify(d.args))}</pre>
+      <button onclick="decide('${d.id}',true);this.parentNode.remove();" style="background:#1c6;color:#04150c;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;">approve</button>
+      <button onclick="decide('${d.id}',false);this.parentNode.remove();" style="background:#a33;color:#fff;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;margin-left:6px;">deny</button>
+    </div>`);}
+  else if(d.type==="plan"){sessAppend(`<div style="border-left:3px solid #5fd0ff;padding-left:8px;margin:4px 0;"><b style="color:#5fd0ff">plan</b><pre style="white-space:pre-wrap;margin:2px 0">${esc(d.content)}</pre></div>`);}
+  else if(d.type==="state"){if(d.state==="WAITING_APPROVAL")sessAppend(`<div style="color:#f0a030;font-size:11px">awaiting approval...</div>`);}
+  else if(d.type==="notice"){sessAppend(`<div style="color:#f0a030;font-size:11px">${esc(d.detail)}</div>`);}
+  else if(d.type==="turn_done"){if(d.error)sessAppend(`<div style="color:#e06a6a;font-size:11px">turn ended: ${esc(d.error)}</div>`);}
+  else if(d.type==="closed"||d.type==="done"){sessAppend(`<div style="color:#8a93a0;font-size:11px">[session ended]</div>`);}
+}
+function openSession(id,mode){
+  sessionId=id; showSession(true);
+  sessEl("sessLog").innerHTML=""; sessEl("sessId").textContent=id;
+  sessEl("sessMode").value=mode; sessEl("sessBanner").style.display=mode==="bypass"?"block":"none";
+  if(sessionES)sessionES.close();
+  sessionES=new EventSource(`/session/${id}/events`);
+  sessionES.onmessage=m=>{try{renderEvent(JSON.parse(m.data));}catch(e){}};
+}
+sessEl("agSession").onclick=async()=>{
+  const name=sessEl("agName").value.trim()||"session";
+  const model=sessEl("agModel").value, mode=sessEl("agMode").value;
+  const task=sessEl("agTask").value.trim();
+  sessEl("agMsg").textContent="opening session...";
+  try{const r=await fetch("/session",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,model,mode,task})});
+    const j=await r.json();
+    if(j.id){sessEl("agMsg").textContent="session open"; sessEl("agTask").value=""; openSession(j.id,j.mode);}
+    else sessEl("agMsg").textContent="error: "+(j.error||"unknown");
+  }catch(e){sessEl("agMsg").textContent="error: "+e;}
+};
+sessEl("sessSend").onclick=()=>{
+  const t=sessEl("sessInput").value.trim(); if(!t||!sessionId)return;
+  sessEl("sessInput").value=""; sessAppend(`<div><b style="color:#5fd0ff">you:</b> ${esc(t)}</div>`);
+  fetch(`/session/${sessionId}/send`,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({type:"user_message",text:t})});
+};
+sessEl("sessInput").addEventListener("keydown",e=>{if(e.key==="Enter")sessEl("sessSend").onclick();});
+sessEl("sessMode").onchange=()=>{
+  if(!sessionId)return; const m=sessEl("sessMode").value;
+  sessEl("sessBanner").style.display=m==="bypass"?"block":"none";
+  fetch(`/session/${sessionId}/send`,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({type:"set_mode",mode:m})});
+};
+sessEl("sessStop").onclick=()=>{if(sessionId)fetch(`/session/${sessionId}/send`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"stop"})});};
+sessEl("sessClose").onclick=()=>{if(sessionES)sessionES.close(); showSession(false);};
 </script></body></html>
