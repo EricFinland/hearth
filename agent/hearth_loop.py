@@ -415,15 +415,28 @@ def main(argv=None):
     p.add_argument("--db", default=DEFAULT_DB)
     p.add_argument("--ollama-url", default=DEFAULT_OLLAMA)
     p.add_argument("--max-iters", type=int, default=MAX_ITERS)
+    p.add_argument("--mode", choices=list(permissions.MODES), default="auto",
+                   help="permission mode: plan, auto, or bypass")
+    p.add_argument("--auto-allow", default="",
+                   help="comma-separated command heads always allowed in auto mode")
+    p.add_argument("--session", action="store_true",
+                   help="run a long-lived interactive session (reads JSON commands "
+                        "from stdin, writes JSON events to stdout)")
     p.add_argument("--self-test", action="store_true")
     a = p.parse_args(argv)
     if a.self_test:
         return _self_test()
+    auto_allow = tuple(x for x in a.auto_allow.split(",") if x)
+    if a.session:
+        run_session(a.model, a.workspace, db=a.db, agent_name=a.agent_name,
+                    ollama_url=a.ollama_url, max_iters=a.max_iters, mode=a.mode,
+                    auto_allow=auto_allow)
+        return 0
     if not a.goal:
-        p.error("a goal is required unless --self-test")
+        p.error("a goal is required unless --self-test or --session")
     final, error = run_loop(a.goal, a.model, a.workspace, db=a.db,
                             agent_name=a.agent_name, ollama_url=a.ollama_url,
-                            max_iters=a.max_iters)
+                            max_iters=a.max_iters, mode=a.mode, auto_allow=auto_allow)
     if error:
         print("hearth-loop error:", error, file=sys.stderr)
         return 1
