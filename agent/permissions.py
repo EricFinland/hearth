@@ -27,6 +27,8 @@ RISK = {
     "write_file": "edit",
     "run_command": "dangerous",
     "http_request": "dangerous",
+    "web_search": "dangerous",
+    "web_fetch": "dangerous",
 }
 
 
@@ -84,6 +86,11 @@ def _self_test():
     assert decide("auto", "mystery") == "gate"
     # unknown mode -> gate (safest)
     assert decide("yolo", "read_file") == "gate"
+    assert risk_of("web_search") == "dangerous", "web_search should be dangerous"
+    assert risk_of("web_fetch") == "dangerous", "web_fetch should be dangerous"
+    assert decide("auto", "web_search") == "gate"
+    assert decide("bypass", "web_fetch") == "allow"
+    assert decide("plan", "web_search") == "deny"
     print("hearth-permissions self-test OK")
     return 0
 
