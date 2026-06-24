@@ -277,6 +277,7 @@ class Session:
         self.proc = proc
         self.events = []
         self.lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self.closed = False
         self._reader = threading.Thread(target=self._pump, daemon=True)
         self._reader.start()
@@ -299,14 +300,17 @@ class Session:
                 self.events.append({"type": "closed"})
 
     def send(self, cmd):
-        """Write one control command to the child's stdin. Returns False if the
-        child's stdin is already gone."""
-        try:
-            self.proc.stdin.write(json.dumps(cmd) + "\n")
-            self.proc.stdin.flush()
-            return True
-        except (BrokenPipeError, ValueError, OSError):
-            return False
+        """Write one control command to the child's stdin. Thread-safe so two
+        callers (e.g. a stop racing a user message) cannot interleave JSON frames.
+        Returns False if the child's stdin is already gone."""
+        line = json.dumps(cmd) + "\n"  # a serialization error is a caller bug; let it raise
+        with self._send_lock:
+            try:
+                self.proc.stdin.write(line)
+                self.proc.stdin.flush()
+                return True
+            except (BrokenPipeError, OSError):
+                return False
 
     def snapshot(self, start):
         """Return (events_from_index_start, closed_flag)."""
@@ -319,6 +323,11 @@ class Session:
             self.proc.stdin.close()
         except OSError:
             pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            self.proc.wait()
 
 
 # Process-wide registry of live sessions, keyed by session id.
@@ -327,13 +336,14 @@ SESSIONS_LOCK = threading.Lock()
 
 
 def spawn_session(loop_cmd, sid, model, mode, workspace, db, ollama_url):
-    """Start a hearth-loop --session child and wrap it in a Session."""
+    """Start a hearth-loop --session child and wrap it in a Session.
+    The caller registers the returned Session in SESSIONS."""
     os.makedirs(workspace, exist_ok=True)
     args = [loop_cmd, "--session", "--model", model, "--mode", mode,
             "--agent-name", sid, "--workspace", workspace, "--db", db,
             "--ollama-url", ollama_url]
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
     return Session(sid, proc)
 
 
