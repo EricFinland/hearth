@@ -120,7 +120,7 @@ def _resolve_cred(name):
     The credentials file is a simple `NAME=VALUE` per line. Returns "" if not
     available, so an agent can never read the raw store directly."""
     allowed = os.environ.get("HEARTH_ALLOWED_CREDS")
-    if allowed is not None and name not in [a for a in allowed.split(",") if a]:
+    if allowed is not None and name not in [a.strip() for a in allowed.split(",") if a.strip()]:
         return ""
     creds_dir = os.environ.get("CREDENTIALS_DIRECTORY")
     if not creds_dir:
@@ -195,7 +195,7 @@ def tool_web_search(args, workspace):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (hearth-agent)"})
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            body = resp.read().decode("utf-8", "replace")
+            body = resp.read(2000000).decode("utf-8", "replace")
     except (urllib.error.URLError, OSError, ValueError) as exc:
         return "error: {}".format(exc)
     results = _parse_ddg_results(body, max_results)
