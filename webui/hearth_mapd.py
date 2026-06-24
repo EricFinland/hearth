@@ -23,6 +23,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -266,6 +267,76 @@ def chat_once(base_url, model, messages, timeout=300):
     return reply, int(data.get("prompt_eval_count", 0) or 0), int(data.get("eval_count", 0) or 0)
 
 
+class Session:
+    """One interactive agent run: a `hearth-loop --session` child process whose
+    stdout JSON events are pumped into an in-memory buffer by a reader thread, and
+    whose stdin receives JSON control commands. Thread-safe."""
+
+    def __init__(self, sid, proc):
+        self.sid = sid
+        self.proc = proc
+        self.events = []
+        self.lock = threading.Lock()
+        self.closed = False
+        self._reader = threading.Thread(target=self._pump, daemon=True)
+        self._reader.start()
+
+    def _pump(self):
+        try:
+            for line in self.proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    ev = {"type": "log", "line": line}
+                with self.lock:
+                    self.events.append(ev)
+        finally:
+            with self.lock:
+                self.closed = True
+                self.events.append({"type": "closed"})
+
+    def send(self, cmd):
+        """Write one control command to the child's stdin. Returns False if the
+        child's stdin is already gone."""
+        try:
+            self.proc.stdin.write(json.dumps(cmd) + "\n")
+            self.proc.stdin.flush()
+            return True
+        except (BrokenPipeError, ValueError, OSError):
+            return False
+
+    def snapshot(self, start):
+        """Return (events_from_index_start, closed_flag)."""
+        with self.lock:
+            return list(self.events[start:]), self.closed
+
+    def stop(self):
+        self.send({"type": "stop"})
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+
+
+# Process-wide registry of live sessions, keyed by session id.
+SESSIONS = {}
+SESSIONS_LOCK = threading.Lock()
+
+
+def spawn_session(loop_cmd, sid, model, mode, workspace, db, ollama_url):
+    """Start a hearth-loop --session child and wrap it in a Session."""
+    os.makedirs(workspace, exist_ok=True)
+    args = [loop_cmd, "--session", "--model", model, "--mode", mode,
+            "--agent-name", sid, "--workspace", workspace, "--db", db,
+            "--ollama-url", ollama_url]
+    proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    return Session(sid, proc)
+
+
 class Handler(BaseHTTPRequestHandler):
     # set by the server factory below
     db = DEFAULT_DB
@@ -418,6 +489,38 @@ def _self_test():
     assert request_allowed("192.168.1.9", "Bearer secret", "secret") is True, "remote good token"
     assert request_allowed("192.168.1.9", "Bearer wrong", "secret") is False, "remote bad token"
     assert request_allowed("192.168.1.9", None, "") is False, "no token configured -> remote denied"
+    # --- Session machinery: spawn a stub child that emits a JSON event and echoes
+    # one line of input. Proves the reader thread buffers events and send() writes
+    # to the child's stdin. No Ollama or hearth-loop needed.
+    import sys as _sys
+    import time as _time
+    child = [_sys.executable, "-c",
+             "import sys,json;"
+             "print(json.dumps({'type':'state','state':'IDLE'}),flush=True);"
+             "line=sys.stdin.readline();"
+             "print(json.dumps({'type':'echo','got':line.strip()}),flush=True)"]
+    proc = subprocess.Popen(child, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    sess = Session("t-1", proc)
+    got_state = False
+    for _ in range(100):
+        evs, _closed = sess.snapshot(0)
+        if any(e.get("type") == "state" for e in evs):
+            got_state = True
+            break
+        _time.sleep(0.05)
+    assert got_state, ("expected a state event from the child", sess.snapshot(0))
+    assert sess.send({"type": "user_message", "text": "ping"}) is True
+    got_echo = None
+    for _ in range(100):
+        evs, _closed = sess.snapshot(0)
+        echo = [e for e in evs if e.get("type") == "echo"]
+        if echo:
+            got_echo = echo[0]
+            break
+        _time.sleep(0.05)
+    assert got_echo and "ping" in got_echo.get("got", ""), ("expected echo of input", sess.snapshot(0))
+    sess.stop()
     print("hearth-mapd self-test OK")
     return 0
 
