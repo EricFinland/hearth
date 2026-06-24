@@ -605,8 +605,10 @@ class Handler(BaseHTTPRequestHandler):
                 capture_output=True, text=True, timeout=5).stdout
             names = [ln.split()[0] for ln in out.splitlines() if ln.strip()]
             for name in names:
-                subprocess.run(["sudo", "-n", "systemctl", "stop", name], timeout=10)
-                units += 1
+                r = subprocess.run(["sudo", "-n", "systemctl", "stop", name],
+                                   capture_output=True, text=True, timeout=10)
+                if r.returncode == 0:
+                    units += 1
         except (OSError, subprocess.SubprocessError):
             pass
         return self._send(200, json.dumps({"stopped_sessions": len(sessions),
