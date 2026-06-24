@@ -191,8 +191,13 @@ def tool_web_search(args, workspace):
     if not query:
         return "error: no query"
     max_results = int(args.get("max_results") or 5)
-    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (hearth-agent)"})
+    # The DDG HTML endpoint serves results only for a POST with the query as form
+    # data; a GET query string just returns the DDG home page.
+    data = urllib.parse.urlencode({"q": query}).encode()
+    req = urllib.request.Request(
+        "https://html.duckduckgo.com/html/", data=data,
+        headers={"User-Agent": "Mozilla/5.0 (hearth-agent)",
+                 "Content-Type": "application/x-www-form-urlencoded"})
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             body = resp.read(2000000).decode("utf-8", "replace")
