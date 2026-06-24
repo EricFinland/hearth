@@ -119,6 +119,9 @@ def _resolve_cred(name):
     """Read a stored credential by name from the systemd credentials directory.
     The credentials file is a simple `NAME=VALUE` per line. Returns "" if not
     available, so an agent can never read the raw store directly."""
+    allowed = os.environ.get("HEARTH_ALLOWED_CREDS")
+    if allowed is not None and name not in [a for a in allowed.split(",") if a]:
+        return ""
     creds_dir = os.environ.get("CREDENTIALS_DIRECTORY")
     if not creds_dir:
         return ""
@@ -322,6 +325,30 @@ def _self_test():
     assert res and res[0]["title"] == "NixOS", res
     assert res[0]["url"] == "https://nixos.org/", res
     assert "Reproducible" in res[0]["snippet"], res
+    # Credential scoping: HEARTH_ALLOWED_CREDS limits which creds resolve.
+    import tempfile as _tf
+    cdir = _tf.mkdtemp(prefix="hearth-creds-")
+    with open(os.path.join(cdir, "creds"), "w") as fh:
+        fh.write("alpha=secretA\nbravo=secretB\n")
+    old_cd = os.environ.get("CREDENTIALS_DIRECTORY")
+    old_allow = os.environ.get("HEARTH_ALLOWED_CREDS")
+    os.environ["CREDENTIALS_DIRECTORY"] = cdir
+    try:
+        os.environ.pop("HEARTH_ALLOWED_CREDS", None)
+        assert _resolve_cred("alpha") == "secretA", "no allow-list: all resolve"
+        assert _resolve_cred("bravo") == "secretB", "no allow-list: all resolve"
+        os.environ["HEARTH_ALLOWED_CREDS"] = "alpha"
+        assert _resolve_cred("alpha") == "secretA", "allowed cred resolves"
+        assert _resolve_cred("bravo") == "", "disallowed cred is withheld"
+    finally:
+        if old_cd is None:
+            os.environ.pop("CREDENTIALS_DIRECTORY", None)
+        else:
+            os.environ["CREDENTIALS_DIRECTORY"] = old_cd
+        if old_allow is None:
+            os.environ.pop("HEARTH_ALLOWED_CREDS", None)
+        else:
+            os.environ["HEARTH_ALLOWED_CREDS"] = old_allow
     print("hearth-tools self-test OK")
     return 0
 
