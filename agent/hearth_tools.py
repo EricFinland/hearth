@@ -11,8 +11,10 @@ escape it, as defence in depth on top of the systemd sandbox.
 import html as _htmlmod
 import json
 import os
+import re
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 
@@ -145,6 +147,61 @@ def tool_web_fetch(args, workspace):
     return text[:MAX_OUT] if text else "(no readable text)"
 
 
+def _ddg_real_url(href):
+    """DDG result links are redirects like //duckduckgo.com/l/?uddg=<encoded>.
+    Return the decoded target, or the href unchanged if already direct."""
+    if "uddg=" in href:
+        try:
+            q = urllib.parse.urlparse("https:" + href if href.startswith("//") else href).query
+            uddg = urllib.parse.parse_qs(q).get("uddg")
+            if uddg:
+                return urllib.parse.unquote(uddg[0])
+        except (ValueError, KeyError):
+            pass
+    if href.startswith("//"):
+        return "https:" + href
+    return href
+
+
+def _parse_ddg_results(html_text, max_results):
+    """Extract [{title, url, snippet}] from DuckDuckGo HTML results."""
+    results = []
+    link_re = re.compile(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', re.S)
+    snip_re = re.compile(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', re.S)
+    links = link_re.findall(html_text or "")
+    snippets = snip_re.findall(html_text or "")
+
+    def clean(s):
+        return " ".join(_htmlmod.unescape(re.sub(r"<[^>]+>", "", s)).split())
+
+    for i, (href, title) in enumerate(links[:max_results]):
+        results.append({
+            "title": clean(title),
+            "url": _ddg_real_url(href),
+            "snippet": clean(snippets[i]) if i < len(snippets) else "",
+        })
+    return results
+
+
+def tool_web_search(args, workspace):
+    query = args.get("query") or args.get("q")
+    if not query:
+        return "error: no query"
+    max_results = int(args.get("max_results") or 5)
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (hearth-agent)"})
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return "error: {}".format(exc)
+    results = _parse_ddg_results(body, max_results)
+    if not results:
+        return "(no results)"
+    return "\n".join("{}. {}\n   {}\n   {}".format(i + 1, r["title"], r["url"], r["snippet"])
+                     for i, r in enumerate(results))[:MAX_OUT]
+
+
 def tool_http_request(args, workspace):
     url = args.get("url")
     if not url:
@@ -203,6 +260,14 @@ TOOLS = [
         "fn": tool_web_fetch,
     },
     {
+        "name": "web_search",
+        "description": "Search the web and return top result titles, URLs, and snippets. Provide query.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "max_results": {"type": "integer"}},
+            "required": ["query"]},
+        "fn": tool_web_search,
+    },
+    {
         "name": "http_request",
         "description": "Make an HTTP request to an external API. Provide url, optional method, headers, body.",
         "parameters": {"type": "object", "properties": {
@@ -249,6 +314,14 @@ def _self_test():
     txt = _html_to_text(sample)
     assert "Title" in txt and "Hello world" in txt and "Line two" in txt, txt
     assert "var a=1" not in txt and "x{}" not in txt, ("script/style stripped", txt)
+    # web_search: the DDG result parser extracts title/url/snippet from result HTML.
+    ddg = ('<div class="result"><a class="result__a" '
+           'href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fnixos.org%2F&rut=x">NixOS</a>'
+           '<a class="result__snippet">Reproducible builds and deployments.</a></div>')
+    res = _parse_ddg_results(ddg, 5)
+    assert res and res[0]["title"] == "NixOS", res
+    assert res[0]["url"] == "https://nixos.org/", res
+    assert "Reproducible" in res[0]["snippet"], res
     print("hearth-tools self-test OK")
     return 0
 
