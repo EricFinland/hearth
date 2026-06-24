@@ -179,7 +179,16 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             fn = call.get("function") or {}
             name = fn.get("name", "")
             raw = fn.get("arguments")
-            cargs = raw if isinstance(raw, dict) else (json.loads(raw) if raw else {})
+            if isinstance(raw, dict):
+                cargs = raw
+            elif raw:
+                try:
+                    cargs = json.loads(raw)
+                except (ValueError, TypeError):
+                    emit({"type": "notice", "detail": "could not parse arguments for " + name})
+                    cargs = {}
+            else:
+                cargs = {}
             verdict = permissions.decide(state["mode"], name, cargs, auto_allow)
             if verdict == "deny":
                 result = "denied: permission mode '{}' does not allow {}".format(
