@@ -14,10 +14,12 @@ let
       [ -f "$req" ] || exit 0
       model="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('model','qwen2.5-coder'))" "$req")"
       mode="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('mode','bypass'))" "$req")"
+      creds="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('creds') or chr(0)*0)" "$req")"
       prompt="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('prompt') or chr(0)*0)" "$req")"
       rm -f "$req"
       ws="/var/lib/hearth/agents/$id"
       mkdir -p "$ws"
+      [ -n "$creds" ] && export HEARTH_ALLOWED_CREDS="$creds"
       exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --agent-name "$id" --model "$model" --mode "$mode" --io db --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
     '';
   };

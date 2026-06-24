@@ -438,15 +438,19 @@ SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
 
 
-def spawn_session(loop_cmd, sid, model, mode, workspace, db, ollama_url):
-    """Start a hearth-loop --session child and wrap it in a Session.
-    The caller registers the returned Session in SESSIONS."""
+def spawn_session(loop_cmd, sid, model, mode, workspace, db, ollama_url, allowed_creds=""):
+    """Start a hearth-loop --session child and wrap it in a Session. The caller
+    registers the returned Session in SESSIONS. allowed_creds (comma-separated)
+    scopes which stored credentials the agent may read; empty means all."""
     os.makedirs(workspace, exist_ok=True)
     args = [loop_cmd, "--session", "--model", model, "--mode", mode,
             "--agent-name", sid, "--workspace", workspace, "--db", db,
             "--ollama-url", ollama_url]
+    env = dict(os.environ)
+    if allowed_creds:
+        env["HEARTH_ALLOWED_CREDS"] = allowed_creds
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+                            stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
     return Session(sid, proc)
 
 
@@ -563,6 +567,8 @@ class Handler(BaseHTTPRequestHandler):
             mode = "bypass"
         if not prompt:
             return self._send(400, json.dumps({"error": "prompt required"}), "application/json")
+        creds = req.get("creds")
+        allowed = ",".join(creds) if isinstance(creds, list) else (creds or "")
         run_id = "{}-{}".format(name, uuid.uuid4().hex[:8])
         queue_dir = "/var/lib/hearth/queue"
         try:
@@ -570,7 +576,8 @@ class Handler(BaseHTTPRequestHandler):
             tmp = os.path.join(queue_dir, run_id + ".json.tmp")
             final = os.path.join(queue_dir, run_id + ".json")
             with open(tmp, "w") as fh:
-                json.dump({"name": name, "model": model, "prompt": prompt, "mode": mode}, fh)
+                json.dump({"name": name, "model": model, "prompt": prompt,
+                           "mode": mode, "creds": allowed}, fh)
             os.replace(tmp, final)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
@@ -584,6 +591,8 @@ class Handler(BaseHTTPRequestHandler):
         if mode not in ("plan", "auto", "bypass"):
             mode = "auto"
         task = req.get("task") or ""
+        creds = req.get("creds")
+        allowed = ",".join(creds) if isinstance(creds, list) else (creds or "")
         sid = "{}-{}".format(name, uuid.uuid4().hex[:8])
         workspace = "/var/lib/hearth/agents/" + sid
         with SESSIONS_LOCK:
@@ -597,7 +606,7 @@ class Handler(BaseHTTPRequestHandler):
                               "application/json")
         try:
             sess = spawn_session(self.loop_cmd, sid, model, mode, workspace,
-                                 self.db, self.ollama_url)
+                                 self.db, self.ollama_url, allowed_creds=allowed)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
         with SESSIONS_LOCK:
