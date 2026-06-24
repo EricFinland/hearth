@@ -11,6 +11,9 @@ description: What hearth does today, the differentiators, and what is captured f
 - Sandboxed execution: agents run as ephemeral DynamicUser processes with ProtectSystem=strict and NoNewPrivileges.
 - Run-level observability: every agent run records tokens, cost, latency, and errors to a local SQLite database.
 - Boot dashboard: a TUI that shows system state, model status, and recent runs on login.
+- Tool-using agent loop: `hearth-loop` gives a model a goal and tools (run commands, read and write files, HTTP), runs it in a per-run workspace, and audits it. See [Agent engine](/hearth/concepts/agent-engine/).
+- Web command center: chat with a local model and launch sandboxed agents from the browser. See [Command center](/hearth/operations/command-center/).
+- Optional KDE Plasma desktop for hosts with a screen. See [Desktop](/hearth/reference/desktop/).
 
 ## Differentiators
 
@@ -27,6 +30,5 @@ description: What hearth does today, the differentiators, and what is captured f
 - Tailscale auto-join to a homelab mesh with pre-shared keys declared in the flake.
 - A "replay" view of a past agent run, showing each tool call and its output.
 - Signed and attested images using cosign or nix-sigstore.
-- A minimal web dashboard mirroring the TUI, accessible over Tailscale.
 - Multi-agent scheduling with priority queues and resource limits.
 - Snapshot and rollback of the entire agent environment (models, secrets, working state) as a Nix closure.

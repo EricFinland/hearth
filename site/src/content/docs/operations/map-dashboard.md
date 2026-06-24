@@ -30,19 +30,44 @@ only. See [Networking & remote access](/hearth/reference/networking/).
 
 `hearth-mapd` exposes a small HTTP surface:
 
-| Route | Returns | Purpose |
-| --- | --- | --- |
-| `/` | HTML | The map page. |
-| `/healthz` | `ok` | Liveness check. |
-| `/state` | JSON | A snapshot of every agent's current state. |
-| `/events` | SSE | A live stream of state changes for the page. |
-| `/stats` | JSON | Live host stats: GPU (via `nvidia-smi`) and memory (from `/proc/meminfo`). |
-| `/command` | HTML | The command console page. |
+| Method | Route | Returns | Purpose |
+| --- | --- | --- | --- |
+| GET | `/` | HTML | The map page. |
+| GET | `/healthz` | `ok` | Liveness check. |
+| GET | `/state` | JSON | A snapshot of every agent's current state. |
+| GET | `/events` | SSE | A live stream of state changes for the page. |
+| GET | `/stats` | JSON | Live host stats: GPU (via `nvidia-smi`) and memory (from `/proc/meminfo`). |
+| GET | `/models` | JSON | The local Ollama models available. |
+| GET | `/runs` | JSON | Recent runs from the audit database. |
+| GET | `/command` | HTML | The [command center](/hearth/operations/command-center/) page. |
+| POST | `/chat` | JSON | Send a message to a model (Ollama chat); recorded as a run. |
+| POST | `/run` | JSON | Atomically enqueue a sandboxed agent launch request. |
 
 The `/stats` endpoint returns `{ "gpu": ..., "mem": ... }`. GPU data comes from
 `nvidia-smi` when it is present (name, utilization, memory used and total) and is
 `null` on a host without an NVIDIA GPU. Memory comes from `/proc/meminfo`. This
 feeds the live system readout on the map.
+
+The `POST /chat` and `POST /run` endpoints are what the
+[command center](/hearth/operations/command-center/) uses to chat and to launch
+sandboxed agents. A launch goes through the
+[on-demand spawn](/hearth/concepts/agent-engine/#on-demand-spawn) queue, so the
+browser never runs anything unsandboxed.
+
+## Access and token auth
+
+`hearth-mapd` is open from localhost. A request from any other address must carry
+a bearer token:
+
+```
+Authorization: Bearer <token>
+```
+
+The token is read from an optional secret environment file. If no token is
+configured, remote requests are denied outright (localhost still works). This
+keeps the chat and launch endpoints from being open on the network by default.
+For remote use, configure the token and prefer reaching the server over Tailscale.
+See [Networking & remote access](/hearth/reference/networking/).
 
 ## How it runs
 
