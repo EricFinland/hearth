@@ -37,6 +37,7 @@ OLLAMA_URL = os.environ.get("HEARTH_OLLAMA", "http://127.0.0.1:11434")
 
 LOCAL_IPS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 API_TOKEN = os.environ.get("HEARTH_API_TOKEN", "")
+MAX_SESSIONS = 24  # safety cap on concurrent interactive sessions (single-user cockpit)
 
 
 def request_allowed(client_ip, auth_header, token):
@@ -469,6 +470,15 @@ class Handler(BaseHTTPRequestHandler):
         task = req.get("task") or ""
         sid = "{}-{}".format(name, uuid.uuid4().hex[:8])
         workspace = "/var/lib/hearth/agents/" + sid
+        with SESSIONS_LOCK:
+            # Lazy reap: drop finished sessions so the registry cannot grow without
+            # bound when clients never stream or disconnect early.
+            for dead in [k for k, s in SESSIONS.items() if s.closed]:
+                SESSIONS.pop(dead, None)
+            full = len(SESSIONS) >= MAX_SESSIONS
+        if full:
+            return self._send(503, json.dumps({"error": "too many active sessions"}),
+                              "application/json")
         try:
             sess = spawn_session(self.loop_cmd, sid, model, mode, workspace,
                                  self.db, self.ollama_url)
@@ -515,7 +525,7 @@ class Handler(BaseHTTPRequestHandler):
                     idx += 1
                     self.wfile.write(("data: " + json.dumps(ev) + "\n\n").encode())
                 self.wfile.flush()
-                if closed and idx >= len(sess.events):
+                if closed and not evs:
                     with SESSIONS_LOCK:
                         SESSIONS.pop(sid, None)
                     return
