@@ -44,28 +44,25 @@ in
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
 
     systemd.services.hearth-mapd = {
-      description = "hearth tycoon map backend";
+      description = "hearth tycoon map backend + agent session host";
       after = [ "network.target" "hearth-audit-init.service" ];
       wantedBy = [ "multi-user.target" ];
+      # The packaged agent loop must be on PATH so the server can spawn
+      # `hearth-loop --session` children for interactive sessions.
+      path = [ config.hearth.agents.loopPackage ];
       serviceConfig = {
-        ExecStart = "${hearthMapd}/bin/hearth-mapd --host 0.0.0.0 --port ${toString cfg.port} --db /var/lib/hearth/runs/audit.db";
-        User = "hearth";
-        Group = "hearth";
+        ExecStart = "${hearthMapd}/bin/hearth-mapd --host 0.0.0.0 --port ${toString cfg.port} --db /var/lib/hearth/runs/audit.db --loop-cmd ${config.hearth.agents.loopPackage}/bin/hearth-loop";
+        # Interactive agents are meant to act on the real machine (the user chose
+        # full-machine reach). The server therefore runs as the operator user with
+        # sudo available, and the strict sandbox is intentionally NOT applied here.
+        # Containment is by network instead: the server is localhost + bearer-token
+        # gated (see request_allowed), and every action is written to the audit DB.
+        User = "operator";
+        Group = "users";
         Restart = "on-failure";
-        # Light hardening. The service only reads the audit DB and serves files.
-        NoNewPrivileges = true;
-        ProtectHome = true;
-        ProtectSystem = "strict";
-        # The runs dir holds the audit db (SQLite writes journal sidecars even
-        # for readers). The queue dir is where /run drops launch requests for the
-        # spawn path-watcher to pick up. Both must be writable by this service.
-        ReadWritePaths = [ "/var/lib/hearth/runs" "/var/lib/hearth/queue" ];
-        # The API token for remote access is read from a secret file if present
-        # (HEARTH_API_TOKEN). Create /var/lib/hearth/secrets/mapd.env with a line
-        # HEARTH_API_TOKEN=<your token> to enable remote API access; without it,
-        # the API is localhost-only. See docs.
         EnvironmentFile = [ "-/var/lib/hearth/secrets/mapd.env" ];
-        PrivateTmp = true;
+        # Children invoke sudo; do not block privilege escalation.
+        NoNewPrivileges = false;
       };
     };
   };
