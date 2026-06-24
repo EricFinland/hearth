@@ -32,6 +32,18 @@ DEFAULT_OLLAMA = "http://127.0.0.1:11434"
 MAX_ITERS = 12
 MAX_EVENT_OUT = 4000  # cap tool output included in an event
 
+TRANSCRIPT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_transcript (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL, ts TEXT NOT NULL, event TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pending_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL, req_id TEXT NOT NULL, tool TEXT, args TEXT, risk TEXT,
+  created_at TEXT NOT NULL, decision TEXT
+);
+"""
+
 SYSTEM_PROMPT = (
     "You are a capable agent working in a sandboxed workspace. You have tools to "
     "run shell commands, read and write files, and make HTTP requests. Use them to "
@@ -218,6 +230,57 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             emit({"type": "tool_result", "tool": name, "output": result[:MAX_EVENT_OUT]})
             messages.append({"role": "tool", "content": result[:MAX_EVENT_OUT]})
     return final, "hit iteration cap ({})".format(max_iters), tokens_out
+
+
+def make_db_transport(db, agent_id, poll_interval=0.5):
+    """Return (emit_fn, control_fn) for a background worker that has no stdio peer.
+    emit_fn appends every event to agent_transcript, and additionally records a
+    pending_actions row whenever the worker requests approval for a gated tool.
+    control_fn blocks polling that row until a decision is written (by the
+    /decide endpoint). The worker is stopped by stopping its systemd unit, which
+    kills this process, so control_fn does not need its own stop path."""
+
+    def _con():
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(TRANSCRIPT_SCHEMA)
+        return con
+
+    def emit(event):
+        try:
+            con = _con()
+            con.execute(
+                "INSERT INTO agent_transcript (agent_id, ts, event) VALUES (?,?,?)",
+                (agent_id, _now_iso(), json.dumps(event)))
+            if event.get("type") == "tool_request":
+                con.execute(
+                    "INSERT INTO pending_actions (agent_id, req_id, tool, args, risk, created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (agent_id, event.get("id"), event.get("tool"),
+                     json.dumps(event.get("args") or {}), event.get("risk"), _now_iso()))
+            con.commit()
+            con.close()
+        except sqlite3.Error:
+            pass
+
+    def control(request):
+        req_id = request.get("id")
+        while True:
+            decision = None
+            try:
+                con = _con()
+                row = con.execute(
+                    "SELECT decision FROM pending_actions "
+                    "WHERE agent_id=? AND req_id=? ORDER BY id DESC LIMIT 1",
+                    (agent_id, req_id)).fetchone()
+                con.close()
+                decision = row[0] if row else None
+            except sqlite3.Error:
+                decision = None
+            if decision:
+                return {"type": "decision", "id": req_id, "allow": decision == "allow"}
+            time.sleep(poll_interval)
+
+    return emit, control
 
 
 def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
@@ -411,6 +474,53 @@ def _self_test():
     assert any(e["type"] == "message" and "hello back" in e.get("content", "") for e in events_s), events_s
     assert events_s[-1]["type"] == "done", events_s[-1]
 
+    # --- DB transport: a background worker writes its transcript and gates via the
+    # audit DB. A helper thread plays the approver (sets the pending row to allow).
+    import sqlite3 as _sql
+    import threading as _th
+    wsd = tempfile.mkdtemp(prefix="hearth-loopDB-")
+    dbp = os.path.join(wsd, "audit.db")
+    emit_db, control_db = make_db_transport(dbp, "bgtest", poll_interval=0.01)
+
+    def _approver():
+        for _ in range(500):
+            try:
+                c = _sql.connect(dbp, timeout=10)
+                row = c.execute("SELECT id FROM pending_actions "
+                                "WHERE agent_id='bgtest' AND decision IS NULL "
+                                "ORDER BY id LIMIT 1").fetchone()
+                if row:
+                    c.execute("UPDATE pending_actions SET decision='allow' WHERE id=?", (row[0],))
+                    c.commit()
+                    c.close()
+                    return
+                c.close()
+            except _sql.Error:
+                pass
+            time.sleep(0.01)
+
+    th = _th.Thread(target=_approver, daemon=True)
+    th.start()
+    db_steps = [
+        ({"role": "assistant", "tool_calls": [{"function": {"name": "run_command",
+            "arguments": {"command": "echo dbok"}}}]}, 1),
+        ({"role": "assistant", "content": "done"}, 1),
+    ]
+    dbseq = iter(db_steps)
+    fdb, edb = run_loop("echo", "mock", wsd, db=dbp, agent_name="bgtest", mode="auto",
+                        chat_fn=lambda m: next(dbseq), emit_fn=emit_db, control_fn=control_db)
+    assert edb is None, edb
+    th.join(timeout=2)
+    con = _sql.connect(dbp, timeout=10)
+    tr = [json.loads(r[0]) for r in con.execute(
+        "SELECT event FROM agent_transcript WHERE agent_id='bgtest' ORDER BY id")]
+    pend = con.execute("SELECT tool, decision FROM pending_actions WHERE agent_id='bgtest'").fetchall()
+    con.close()
+    assert any(e.get("type") == "tool_request" for e in tr), tr
+    ran = [e for e in tr if e.get("type") == "tool_result" and not e.get("denied")]
+    assert ran and "dbok" in ran[0].get("output", ""), ("expected the approved command to run", tr)
+    assert pend and pend[0][0] == "run_command" and pend[0][1] == "allow", pend
+
     print("hearth-loop self-test OK:", final)
     return 0
 
@@ -426,6 +536,8 @@ def main(argv=None):
     p.add_argument("--max-iters", type=int, default=MAX_ITERS)
     p.add_argument("--mode", choices=list(permissions.MODES), default="auto",
                    help="permission mode: plan, auto, or bypass")
+    p.add_argument("--io", choices=["stdio", "db"], default="stdio",
+                   help="event/control transport: stdio (interactive) or db (background worker)")
     p.add_argument("--auto-allow", default="",
                    help="comma-separated command heads always allowed in auto mode")
     p.add_argument("--session", action="store_true",
@@ -436,18 +548,22 @@ def main(argv=None):
     if a.self_test:
         return _self_test()
     auto_allow = tuple(x for x in a.auto_allow.split(",") if x)
+    emit_fn = control_fn = None
+    if a.io == "db":
+        emit_fn, control_fn = make_db_transport(a.db, a.agent_name)
     if a.session and a.goal:
         p.error("--session does not take a positional goal; send goals via stdin")
     if a.session:
         run_session(a.model, a.workspace, db=a.db, agent_name=a.agent_name,
                     ollama_url=a.ollama_url, max_iters=a.max_iters, mode=a.mode,
-                    auto_allow=auto_allow)
+                    auto_allow=auto_allow, emit_fn=emit_fn, control_fn=control_fn)
         return 0
     if not a.goal:
         p.error("a goal is required unless --self-test or --session")
     final, error = run_loop(a.goal, a.model, a.workspace, db=a.db,
                             agent_name=a.agent_name, ollama_url=a.ollama_url,
-                            max_iters=a.max_iters, mode=a.mode, auto_allow=auto_allow)
+                            max_iters=a.max_iters, mode=a.mode, auto_allow=auto_allow,
+                            emit_fn=emit_fn, control_fn=control_fn)
     if error:
         print("hearth-loop error:", error, file=sys.stderr)
         return 1
