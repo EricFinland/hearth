@@ -205,8 +205,8 @@ def _sim(n, db):
 def _self_test():
     assert "WAITING_APPROVAL" in STATES, "WAITING_APPROVAL missing from STATES"
     assert "WAITING_APPROVAL" in STATE_ICONS, "WAITING_APPROVAL missing from STATE_ICONS"
-    import tempfile, os as _os
-    db = _os.path.join(tempfile.mkdtemp(prefix="hearth-state-"), "s.db")
+    import tempfile
+    db = os.path.join(tempfile.mkdtemp(prefix="hearth-state-"), "s.db")
     emit_state("a1", "WAITING_APPROVAL", "needs approval: run_command", db=db)
     snap = {r["agent_id"]: r for r in snapshot(db)}
     assert snap["a1"]["state"] == "WAITING_APPROVAL", snap
@@ -234,6 +234,10 @@ def main(argv=None):
 
     if getattr(args, "self_test", False):
         return _self_test()
+
+    if args.cmd is None:
+        parser.print_help()
+        return 2
 
     if args.cmd == "emit":
         emit_state(args.agent_id, args.state, args.detail, db=args.db)
