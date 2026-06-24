@@ -38,6 +38,13 @@ OLLAMA_URL = os.environ.get("HEARTH_OLLAMA", "http://127.0.0.1:11434")
 
 LOCAL_IPS = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
 API_TOKEN = os.environ.get("HEARTH_API_TOKEN", "")
+
+# The cockpit runs as a systemd service with a minimal PATH, so the kill switch
+# resolves these tools explicitly: PATH first, then the NixOS stable locations
+# (the system profile and the setuid sudo wrapper). On a non-NixOS dev box these
+# fall back to paths that do not exist, and the kill switch simply finds no units.
+SYSTEMCTL = shutil.which("systemctl") or "/run/current-system/sw/bin/systemctl"
+SUDO = shutil.which("sudo") or "/run/wrappers/bin/sudo"
 MAX_SESSIONS = 24  # safety cap on concurrent interactive sessions (single-user cockpit)
 
 
@@ -617,11 +624,11 @@ class Handler(BaseHTTPRequestHandler):
         units = 0
         try:
             out = subprocess.run(
-                ["systemctl", "list-units", "--plain", "--no-legend", "hearth-agent@*.service"],
+                [SYSTEMCTL, "list-units", "--plain", "--no-legend", "hearth-agent@*.service"],
                 capture_output=True, text=True, timeout=5).stdout
             names = [ln.split()[0] for ln in out.splitlines() if ln.strip()]
             for name in names:
-                r = subprocess.run(["sudo", "-n", "systemctl", "stop", name],
+                r = subprocess.run([SUDO, "-n", SYSTEMCTL, "stop", name],
                                    capture_output=True, text=True, timeout=10)
                 if r.returncode == 0:
                     units += 1
