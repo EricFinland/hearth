@@ -143,7 +143,7 @@ document.getElementById("agLaunch").onclick=async()=>{
 // ---- interactive session console ----
 let sessionES=null, sessionId=null;
 const sessEl=id=>document.getElementById(id);
-function sessAppend(html){const l=sessEl("sessLog");l.innerHTML+=html;l.scrollTop=l.scrollHeight;}
+function sessAppend(html){const l=sessEl("sessLog");l.insertAdjacentHTML("beforeend",html);l.scrollTop=l.scrollHeight;}
 function esc(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");}
 function showSession(on){
   sessEl("session").style.display=on?"flex":"none";
@@ -159,12 +159,25 @@ function renderEvent(d){
     const tag=d.denied?'<span style="color:#e06a6a">denied</span>':'<span style="color:#5fd0ff">ran</span>';
     sessAppend(`<div style="opacity:.85">${tag} <b>${esc(d.tool)}</b><pre style="white-space:pre-wrap;margin:2px 0;color:#9fb6cc">${esc(d.output||"")}</pre></div>`);}
   else if(d.type==="tool_request"){
-    sessAppend(`<div id="req_${d.id}" style="border:1px solid #6a5a1a;background:#241f0e;border-radius:6px;padding:6px;margin:4px 0;">
-      <div><b style="color:#f0a030">approve?</b> <b>${esc(d.tool)}</b> <small style="color:#8a93a0">(${esc(d.risk)})</small></div>
-      <pre style="white-space:pre-wrap;margin:4px 0;color:#cfe6ff">${esc(JSON.stringify(d.args))}</pre>
-      <button onclick="decide('${d.id}',true);this.parentNode.remove();" style="background:#1c6;color:#04150c;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;">approve</button>
-      <button onclick="decide('${d.id}',false);this.parentNode.remove();" style="background:#a33;color:#fff;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;margin-left:6px;">deny</button>
-    </div>`);}
+    const l=sessEl("sessLog");
+    const card=document.createElement("div");
+    card.style.cssText="border:1px solid #6a5a1a;background:#241f0e;border-radius:6px;padding:6px;margin:4px 0;";
+    card.innerHTML=`<div><b style="color:#f0a030">approve?</b> <b>${esc(d.tool)}</b> <small style="color:#8a93a0">(${esc(d.risk)})</small></div>`+
+      `<pre style="white-space:pre-wrap;margin:4px 0;color:#cfe6ff">${esc(JSON.stringify(d.args))}</pre>`;
+    const rid=d.id;
+    const ok=document.createElement("button");
+    ok.textContent="approve";
+    ok.style.cssText="background:#1c6;color:#04150c;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;";
+    ok.onclick=()=>{decide(rid,true);card.remove();};
+    const no=document.createElement("button");
+    no.textContent="deny";
+    no.style.cssText="background:#a33;color:#fff;border:0;border-radius:6px;padding:3px 10px;cursor:pointer;margin-left:6px;";
+    no.onclick=()=>{decide(rid,false);card.remove();};
+    card.appendChild(ok);
+    card.appendChild(no);
+    l.appendChild(card);
+    l.scrollTop=l.scrollHeight;
+  }
   else if(d.type==="plan"){sessAppend(`<div style="border-left:3px solid #5fd0ff;padding-left:8px;margin:4px 0;"><b style="color:#5fd0ff">plan</b><pre style="white-space:pre-wrap;margin:2px 0">${esc(d.content)}</pre></div>`);}
   else if(d.type==="state"){if(d.state==="WAITING_APPROVAL")sessAppend(`<div style="color:#f0a030;font-size:11px">awaiting approval...</div>`);}
   else if(d.type==="notice"){sessAppend(`<div style="color:#f0a030;font-size:11px">${esc(d.detail)}</div>`);}
@@ -205,5 +218,5 @@ sessEl("sessMode").onchange=()=>{
     body:JSON.stringify({type:"set_mode",mode:m})});
 };
 sessEl("sessStop").onclick=()=>{if(sessionId)fetch(`/session/${sessionId}/send`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"stop"})});};
-sessEl("sessClose").onclick=()=>{if(sessionES)sessionES.close(); showSession(false);};
+sessEl("sessClose").onclick=()=>{if(sessionES)sessionES.close(); sessionES=null; sessionId=null; showSession(false);};
 </script></body></html>
