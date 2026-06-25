@@ -1,42 +1,128 @@
-# hearth
+<div align="center">
 
-An opinionated, reproducible, security-first Linux system where local LLMs and agents run sandboxed by default, every agent run is audited, and system state is legible from boot.
+<img src=".github/assets/hero.svg" alt="hearth" width="100%">
 
-**📖 Documentation: https://ericfinland.github.io/hearth/**
+<br/>
+<br/>
 
-## What this is / what it is not
+![NixOS](https://img.shields.io/badge/NixOS-flake-cc785c?style=flat-square&logo=nixos&logoColor=white&labelColor=211c16)
+![Ollama](https://img.shields.io/badge/LLMs-Ollama-cc785c?style=flat-square&logo=ollama&logoColor=white&labelColor=211c16)
+![Sandboxed](https://img.shields.io/badge/agents-sandboxed-cc785c?style=flat-square&logo=linux&logoColor=white&labelColor=211c16)
+![Audited](https://img.shields.io/badge/every%20run-audited-cc785c?style=flat-square&logo=sqlite&logoColor=white&labelColor=211c16)
+![License](https://img.shields.io/badge/license-MIT-cc785c?style=flat-square&labelColor=211c16)
 
-hearth is a declarative NixOS configuration for running local language models and autonomous agents. It is not a custom Linux kernel or a remastered distro. It is a single flake.nix that Nix builds reproducibly and deploys to any NixOS host or Proxmox VM.
+### Local LLMs and autonomous agents, sandboxed by default. Every run audited. The whole OS reproducible from one flake.
 
-## Why
+[**📖 Documentation**](https://ericfinland.github.io/hearth/) &nbsp;·&nbsp; [**🚀 Quickstart**](#quickstart) &nbsp;·&nbsp; [**🧠 Architecture**](https://ericfinland.github.io/hearth/concepts/architecture/)
 
-Most people running local agents are flying blind, running them with full system privileges and no record of what they did. hearth makes agent activity legible and contained at the OS level. Every agent run is sandboxed via systemd isolation primitives, and every run records its token count, cost, latency, and any errors to a local SQLite database. You can query the last 20 runs in one command.
+</div>
+
+---
+
+Most people run local agents with full system privileges and no record of what they did. **hearth flips that.** Agents are contained at the operating-system level, every run records its tokens, cost, latency, and errors to a local database, and the entire system is defined in one `flake.nix` you can rebuild identically and roll back in a single command.
+
+> It is not a custom kernel or a remastered distro. It is a declarative NixOS system you `nixos-rebuild switch` into existence.
+
+## What makes it different
+
+|  |  |
+| --- | --- |
+| 🛡️ **Sandboxed by default** | Agents run as ephemeral, isolated systemd units. No host secrets, no writes outside their own workspace, no privilege escalation. |
+| 🧾 **Every run audited** | Tokens, cost, latency, and errors land in local SQLite. One command shows the last 20 runs. A failed run still leaves a trail. |
+| ♻️ **Reproducible from boot** | One flake builds the whole OS. Atomic, bootloader-level rollback. Two builds from the same lock are identical. |
+| 🧠 **Local and private** | Ollama on your own GPU, agents that actually use tools, a web command center. Zero cloud, nothing leaves the box. |
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Dev["💻 Your laptop<br/>edit · git push"] --> GH["GitHub"]
+  GH -->|"nixos-rebuild --flake"| Host
+
+  subgraph Host["🔥 hearth host"]
+    direction TB
+    LLM["Ollama + CUDA"]
+    AG["Sandboxed agents"]
+    DB[("SQLite audit")]
+    MAP["Web command center"]
+    LLM --> AG
+    AG --> DB
+    AG --> MAP
+  end
+```
+
+## See it run
+
+```console
+$ hearth-status
+● ollama       active (running)   llama3.2:3b, mistral:7b
+● tailscale    connected
+● recent runs  3 in the last hour
+
+$ hearth-runs
+AGENT   MODEL          TOKENS   LATENCY   COST
+demo    llama3.2:3b      142     0.9s     $0.00
+build   qwen2.5-coder    2.1k    14s      $0.00
+chat    mistral:7b       430     3.2s     $0.00
+```
+
+## How a run stays contained
+
+```mermaid
+sequenceDiagram
+  actor You
+  participant Agent as Agent (sandboxed)
+  participant Model as Local model
+  participant Tools as Tools (workspace only)
+  participant Audit as Audit log
+
+  You->>Agent: goal
+  loop until done
+    Agent->>Model: think
+    Model-->>Agent: tool call
+    Agent->>Tools: run · no escape · secrets by name only
+    Tools-->>Agent: result
+  end
+  Agent->>Audit: tokens · cost · latency
+  Agent-->>You: result + receipt
+```
 
 ## Quickstart
 
-```
-# clone
-git clone https://github.com/YOUR_USERNAME/hearth
+```sh
+git clone https://github.com/EricFinland/hearth
 cd hearth
 
-# validate the flake (first run fetches inputs, takes a few minutes)
-nix flake check
-
-# build a Proxmox-compatible image
-bash scripts/build-image.sh
-
-# apply to an existing NixOS host
-bash scripts/bootstrap.sh
+nix flake check               # validate the whole system
+bash scripts/build-image.sh   # build a bootable image
 ```
 
-## Documentation
+Full install paths (existing NixOS host, fresh VM, or a Linux primer) live in the docs:
 
-Full documentation lives at **https://ericfinland.github.io/hearth/**.
+### → **[ericfinland.github.io/hearth](https://ericfinland.github.io/hearth/)**
 
-The docs site is the canonical source. Its content lives in `site/` and is
-published to GitHub Pages on every push. The Markdown files under `docs/` are
-now short pointers to the live pages.
+<details>
+<summary><b>The full feature set</b></summary>
 
-## License
+<br/>
 
-MIT. See [LICENSE](LICENSE).
+- **Declarative NixOS system.** The entire OS is one flake; `nixos-rebuild switch` applies changes atomically.
+- **Ollama on boot** with a declarative model manifest pulled on activation, CUDA-accelerated.
+- **Tool-using agent loop** (`hearth-loop`): a model gets a goal and tools (run commands, read and write files, HTTP), runs in a per-run workspace, and is audited.
+- **Least-privilege sandbox** with a written threat model: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capabilities, a syscall filter, and per-run private temp.
+- **Per-run audit log** in SQLite, queryable with `hearth-runs`.
+- **Web command center:** chat with a local model and launch sandboxed agents from the browser.
+- **Agent credentials by name:** keys are substituted at request time via systemd credentials, so the model never sees the secret value.
+- **MCP audit gate:** no audit-required MCP server starts without an approval file.
+- **Optional KDE Plasma desktop** for hosts with a screen.
+- **Tailscale mesh** plus a tight firewall, secrets via sops-nix, and a boot dashboard that shows system state on login.
+
+</details>
+
+---
+
+<div align="center">
+
+Built by <a href="https://github.com/EricFinland">Eric Catalano</a> &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; <a href="https://ericfinland.github.io/hearth/">Docs</a>
+
+</div>
