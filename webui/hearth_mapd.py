@@ -518,6 +518,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"runs": read_runs(self.db)}), "application/json")
         if path == "/command":
             return self._serve_static("command.html", "text/html; charset=utf-8")
+        if path == "/world":
+            return self._serve_static("world.html", "text/html; charset=utf-8")
         if path == "/pending":
             return self._send(200, json.dumps({"pending": read_pending(self.db)}), "application/json")
         if path == "/transcript":
