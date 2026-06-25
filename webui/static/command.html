@@ -3,6 +3,16 @@
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>hearth command</title>
 <style>
+  #worldLink {
+    position: fixed; top: 10px; right: 14px; z-index: 100;
+    font-size: 10px; color: #8a93a0; text-decoration: none;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    border: 1px solid #16324f; padding: 2px 8px; border-radius: 6px;
+    background: rgba(5,8,15,0.7);
+  }
+  #worldLink:hover { color: #5fd0ff; border-color: #5fd0ff; }
+</style>
+<style>
   :root { color-scheme: dark; }
   html,body { margin:0; height:100%; background:#05080f; color:#cfe6ff;
     font-family: ui-monospace, Menlo, Consolas, monospace; overflow:hidden; }
@@ -26,6 +36,7 @@
 </style></head>
 <body>
 <canvas id="bg"></canvas>
+<a id="worldLink" href="/world">world</a>
 <div id="grid">
   <div class="card" id="stats"><div class="title">system</div><div id="statsBody">loading...</div></div>
   <div class="card" id="chat">

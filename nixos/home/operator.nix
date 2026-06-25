@@ -65,7 +65,7 @@ in
   xdg.desktopEntries.hearth = {
     name = "hearth";
     comment = "Local LLM and agent cockpit";
-    exec = "${pkgs.firefox}/bin/firefox --new-window --class hearth-app --app=http://localhost:8770/command";
+    exec = "${pkgs.firefox}/bin/firefox --new-window --class hearth-app --app=http://localhost:8770/world";
     terminal = false;
     categories = [ "Utility" "Development" ];
   };

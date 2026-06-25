@@ -11,6 +11,30 @@
     color: #cfe6ff;
   }
   #c { position: fixed; inset: 0; width: 100%; height: 100%; }
+  /* CRT scanline + vignette overlay */
+  #crt {
+    position: fixed; inset: 0; z-index: 5; pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px, transparent 2px,
+      rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px
+    );
+  }
+  #crt-vignette {
+    position: fixed; inset: 0; z-index: 6; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 50%, transparent 50%, rgba(0,0,4,0.55) 100%);
+  }
+  /* subtle flicker driven by JS class toggle */
+  #crt.flicker { opacity: 0.93; }
+  /* CRT toggle */
+  #crtToggle {
+    position: fixed; bottom: 60px; right: 12px; z-index: 20;
+    background: rgba(8,14,24,0.7); border: 1px solid #16324f;
+    color: #5a7fa0; font-size: 9px; font-family: inherit;
+    padding: 3px 7px; border-radius: 5px; cursor: pointer;
+    letter-spacing: .05em;
+  }
+  #crtToggle:hover { color: #5fd0ff; border-color: #5fd0ff; }
   /* HUD top bar */
   #hud {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
@@ -73,7 +97,7 @@
     pointer-events: none;
   }
   #toast.show { opacity: 1; }
-  /* Popover */
+  /* Popover (hover) */
   #popover {
     position: fixed; z-index: 30;
     background: rgba(8,14,24,0.96); border: 1px solid #16324f;
@@ -86,9 +110,45 @@
   #popover .pop-label { color: #5a7fa0; }
   #popover .pop-val { color: #cfe6ff; text-align: right; max-width: 160px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Inspect panel (click) */
+  #inspect {
+    position: fixed; right: 0; top: 44px; bottom: 52px; z-index: 25;
+    width: 320px; background: rgba(5,8,15,0.96); border-left: 1px solid #16324f;
+    display: none; flex-direction: column; overflow: hidden;
+  }
+  #inspect.open { display: flex; }
+  #inspect-header {
+    padding: 10px 14px 8px; border-bottom: 1px solid #16324f;
+    display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+  }
+  #inspect-title { color: #5fd0ff; font-size: 12px; font-weight: bold; }
+  #inspect-close {
+    cursor: pointer; color: #5a7fa0; font-size: 14px; line-height: 1;
+    background: none; border: none; padding: 0; font-family: inherit;
+  }
+  #inspect-close:hover { color: #5fd0ff; }
+  #inspect-meta { padding: 6px 14px; font-size: 10px; color: #5a7fa0; border-bottom: 1px solid #0e2236; flex-shrink: 0; }
+  #inspect-body {
+    flex: 1; overflow-y: auto; padding: 8px 14px;
+    font-size: 11px; line-height: 1.55;
+  }
+  .ev-msg { margin: 6px 0; }
+  .ev-msg .ev-who { color: #6fcf7f; font-size: 10px; }
+  .ev-msg .ev-text { color: #cfe6ff; white-space: pre-wrap; word-break: break-word; }
+  .ev-tool { margin: 6px 0; background: rgba(14,34,54,0.6); border-left: 2px solid #5fd0ff;
+    padding: 4px 8px; border-radius: 0 4px 4px 0; }
+  .ev-tool .ev-tname { color: #5fd0ff; font-size: 10px; }
+  .ev-tool .ev-tout { color: #9fb6cc; font-size: 10px; white-space: pre-wrap; word-break: break-word; }
+  .ev-spawn { color: #8a93a0; font-size: 10px; font-style: italic; margin: 4px 0; }
+  #inspect-loading { padding: 20px 14px; color: #5a7fa0; font-size: 11px; }
+  #inspect-empty { padding: 20px 14px; color: #5a7fa0; font-size: 11px; }
 </style>
 </head><body>
 <canvas id="c"></canvas>
+<!-- CRT effect layers -->
+<div id="crt"></div>
+<div id="crt-vignette"></div>
+<button id="crtToggle" title="toggle scanlines">CRT</button>
 <!-- HUD top -->
 <div id="hud">
   <div class="logo"><span class="flame">&#x1F525;</span> hearth facility</div>
@@ -124,6 +184,19 @@
   <div class="pop-row"><span class="pop-label">state</span><span class="pop-val" id="popState">--</span></div>
   <div class="pop-row"><span class="pop-label">detail</span><span class="pop-val" id="popDetail">--</span></div>
   <div class="pop-row"><span class="pop-label">goal</span><span class="pop-val" id="popGoal">--</span></div>
+  <div style="margin-top:6px;font-size:9px;color:#3a5a7a">click to inspect</div>
+</div>
+<!-- inspect panel (click-to-open) -->
+<div id="inspect">
+  <div id="inspect-header">
+    <span id="inspect-title">agent</span>
+    <button id="inspect-close">x</button>
+  </div>
+  <div id="inspect-meta"></div>
+  <div id="inspect-body">
+    <div id="inspect-loading" style="display:none">loading transcript...</div>
+    <div id="inspect-empty" style="display:none">no transcript yet</div>
+  </div>
 </div>
 <script>
 // ---- constants ----
@@ -169,6 +242,10 @@ const ctx = canvas.getContext('2d');
 let W = 0, H = 0, WORLD_W = 0, WORLD_H = 0;
 const MARGIN_TOP = 48, MARGIN_BOT = 56;
 
+// track whether inspect panel is open so we shrink world width
+let inspectOpen = false;
+const INSPECT_W = 320;
+
 function resize() {
   W = canvas.width = window.innerWidth;
   H = canvas.height = window.innerHeight;
@@ -177,6 +254,29 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 resize();
+
+// ---- CRT effect ----
+let crtEnabled = true;
+const crtEl = document.getElementById('crt');
+const crtVig = document.getElementById('crt-vignette');
+let flickerFrame = 0;
+
+function updateCrt() {
+  if (!crtEnabled) return;
+  flickerFrame++;
+  // flicker every ~4-8 seconds at random (very subtle)
+  if (flickerFrame % 240 === 0 && Math.random() < 0.3) {
+    crtEl.classList.add('flicker');
+    setTimeout(() => crtEl.classList.remove('flicker'), 80 + Math.random() * 80);
+  }
+}
+
+document.getElementById('crtToggle').addEventListener('click', () => {
+  crtEnabled = !crtEnabled;
+  crtEl.style.display = crtEnabled ? '' : 'none';
+  crtVig.style.display = crtEnabled ? '' : 'none';
+  document.getElementById('crtToggle').style.color = crtEnabled ? '#5a7fa0' : '#3a5060';
+});
 
 // ---- particle system (ambient dust) ----
 const NUM_DUST = 60;
@@ -273,7 +373,7 @@ function drawWorld() {
   // title plate
   drawTitlePlate();
 
-  // vignette
+  // vignette (canvas-drawn)
   const vg = ctx.createRadialGradient(W/2, MARGIN_TOP + WORLD_H/2, WORLD_H*0.25, W/2, MARGIN_TOP + WORLD_H/2, WORLD_H*0.75);
   vg.addColorStop(0, 'rgba(0,0,0,0)');
   vg.addColorStop(1, 'rgba(0,0,8,0.45)');
@@ -293,7 +393,6 @@ function drawTitlePlate() {
 }
 
 // ---- sprite system ----
-// Each agent gets a Sprite that animates smoothly toward a target position.
 const sprites = new Map(); // agent_id -> Sprite
 const treeNodes = new Map(); // agent_id -> {parent_id, kind, goal}
 
@@ -308,15 +407,15 @@ class Sprite {
     // spawn from entrance
     this.x = W / 2 + (Math.random() - 0.5) * 80;
     this.y = MARGIN_TOP + WORLD_H - 20;
-    this.tx = this.x; // target x
-    this.ty = this.y; // target y
+    this.tx = this.x;
+    this.ty = this.y;
 
-    this.age = 0;       // frames alive
+    this.age = 0;
     this.bobPhase = Math.random() * Math.PI * 2;
     this.walkPhase = 0;
     this.particles = [];
     this.fadeOut = false;
-    this.alpha = 0;     // fade in
+    this.alpha = 0;
     this.done = false;
     this.doneTimer = 0;
     this.celebTimer = 0;
@@ -335,10 +434,8 @@ class Sprite {
 
   update(dt) {
     this.age++;
-    // fade in
     if (this.alpha < 1) this.alpha = Math.min(1, this.alpha + 0.04);
 
-    // lerp toward target
     const dx = this.tx - this.x;
     const dy = this.ty - this.y;
     const dist = Math.sqrt(dx*dx + dy*dy);
@@ -351,13 +448,11 @@ class Sprite {
 
     this.bobPhase += 0.04;
 
-    // thought animation
     if (this.state === 'THINKING') {
       this.thoughtTimer++;
       if (this.thoughtTimer > 18) { this.thoughtTimer = 0; this.thoughtDots = (this.thoughtDots + 1) % 4; }
     }
 
-    // tool call sparks
     if (this.state === 'TOOL_CALL') {
       if (Math.random() < 0.25) {
         const r = this.isManager() ? 14 : 10;
@@ -370,18 +465,13 @@ class Sprite {
       }
     }
 
-    // approval pulse
     if (this.state === 'WAITING_APPROVAL') this.approvalPulse += 0.08;
-
-    // error flash
     if (this.state === 'ERRORED') this.errorFlash += 0.12;
 
-    // done celebration
     if (this.state === 'DONE') {
       if (!this.fadeOut) {
         this.celebTimer++;
         if (this.celebTimer < 60) {
-          // shoot sparkles
           if (this.celebTimer % 4 === 0) {
             const angle = Math.random() * Math.PI * 2;
             this.sparkles.push({
@@ -393,7 +483,6 @@ class Sprite {
             });
           }
         } else {
-          // walk out
           this.fadeOut = true;
           this.setTarget(W / 2 + (Math.random()-0.5)*60, MARGIN_TOP + WORLD_H - 20);
         }
@@ -404,12 +493,12 @@ class Sprite {
       }
     }
 
-    // update particles
-    this.particles = this.particles.filter(p => {
+    // cap particles for performance
+    this.particles = this.particles.slice(-40).filter(p => {
       p.x += p.vx; p.y += p.vy; p.vy += 0.04; p.life -= p.decay;
       return p.life > 0;
     });
-    this.sparkles = this.sparkles.filter(s => {
+    this.sparkles = this.sparkles.slice(-30).filter(s => {
       s.x += s.vx; s.y += s.vy; s.vy += 0.05; s.life -= 0.035;
       return s.life > 0;
     });
@@ -425,20 +514,16 @@ class Sprite {
     ctx.globalAlpha = this.alpha;
 
     const mgr = this.isManager();
-    const R = mgr ? 14 : 9;  // body half-size
+    const R = mgr ? 14 : 9;
     const headR = mgr ? 7 : 5;
 
-    // bob
     const bobAmt = (this.state === 'IDLE' || this.state === 'THINKING' || this.state === 'WAITING_IO') ? 2 : 0;
     const bob = Math.sin(this.bobPhase) * bobAmt;
 
-    // walk legs
     const moving = Math.abs(this.tx - this.x) > 2 || Math.abs(this.ty - this.y) > 2;
     const legSwing = moving ? Math.sin(this.walkPhase) * 3 : 0;
 
     const bx = this.x, by = this.y + bob;
-
-    // tether line (drawn later in batch)
 
     // --- draw legs ---
     ctx.strokeStyle = STATE_COLOR[this.state] || PALETTE.cyan;
@@ -453,7 +538,7 @@ class Sprite {
     }
     ctx.globalAlpha = this.alpha;
 
-    // --- body (rounded rect) ---
+    // --- body ---
     const bodyCol = STATE_COLOR[this.state] || PALETTE.cyan;
     const outline = mgr ? '#fff' : bodyCol;
     ctx.fillStyle = PALETTE.panel;
@@ -463,7 +548,6 @@ class Sprite {
     ctx.fill();
     ctx.stroke();
 
-    // manager body inner glow
     if (mgr) {
       ctx.fillStyle = bodyCol;
       ctx.globalAlpha = this.alpha * 0.1;
@@ -472,7 +556,7 @@ class Sprite {
       ctx.globalAlpha = this.alpha;
     }
 
-    // arms (little stubs)
+    // arms
     ctx.strokeStyle = outline;
     ctx.lineWidth = mgr ? 2.5 : 1.5;
     const armWave = this.state === 'TOOL_CALL' ? Math.sin(this.age * 0.3) * 4 : 0;
@@ -516,7 +600,6 @@ class Sprite {
     } else if (this.state === 'TOOL_CALL') {
       this.drawWrench(bx + R + 8, by - 8);
     } else if (this.state === 'DONE' && !this.fadeOut) {
-      // green check
       const t = Math.min(this.celebTimer / 20, 1);
       ctx.strokeStyle = PALETTE.green;
       ctx.lineWidth = 2.5;
@@ -566,14 +649,12 @@ class Sprite {
 
   drawThoughtBubble(bx, by) {
     const dots = '.'.repeat(this.thoughtDots) || '.';
-    // bubble chain
     ctx.fillStyle = PALETTE.panel;
     ctx.strokeStyle = PALETTE.cyan;
     ctx.lineWidth = 1;
     ctx.globalAlpha = this.alpha * 0.85;
     ctx.beginPath(); ctx.arc(bx + 4, by + 2, 2, 0, Math.PI*2); ctx.fill(); ctx.stroke();
     ctx.beginPath(); ctx.arc(bx + 8, by - 2, 3, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-    // main bubble
     roundRect(ctx, bx - 14, by - 20, 28, 14, 5);
     ctx.fill(); ctx.stroke();
     ctx.globalAlpha = this.alpha;
@@ -594,7 +675,6 @@ class Sprite {
     ctx.strokeStyle = PALETTE.cyan;
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(bx, by, 7, angle, angle + Math.PI * 1.3); ctx.stroke();
-    // hourglass dots
     ctx.fillStyle = PALETTE.cyan;
     ctx.globalAlpha = this.alpha * 0.6;
     ctx.beginPath(); ctx.arc(bx, by - 3, 1.5, 0, Math.PI*2); ctx.fill();
@@ -642,9 +722,7 @@ class Sprite {
     ctx.strokeStyle = PALETTE.cyan;
     ctx.lineWidth = 2;
     ctx.globalAlpha = this.alpha * 0.9;
-    // wrench head
     ctx.beginPath(); ctx.arc(0, -5, 4, 0, Math.PI*2); ctx.stroke();
-    // handle
     ctx.beginPath(); ctx.moveTo(0, -1); ctx.lineTo(0, 7); ctx.stroke();
     ctx.restore();
   }
@@ -665,16 +743,14 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 // ---- layout engine ----
-// Assigns target positions, grouping managers with their specialists.
 function layoutSprites() {
-  const groups = []; // [{manager, specialists:[]}]
+  const groups = [];
   const loners = [];
 
   for (const [id, sp] of sprites) {
     const node = treeNodes.get(id);
     if (!node) { loners.push(sp); continue; }
-    if (node.parent_id) continue; // specialist, handled by its manager group
-    // it's a root or standalone
+    if (node.parent_id) continue;
     const children = [...sprites.values()].filter(s => {
       const n = treeNodes.get(s.id);
       return n && n.parent_id === id;
@@ -686,28 +762,24 @@ function layoutSprites() {
     }
   }
 
-  // add specialists that have no corresponding manager sprite in view
   for (const [id, sp] of sprites) {
     const node = treeNodes.get(id);
     if (node && node.parent_id) {
-      // check if parent sprite exists
       if (!sprites.has(node.parent_id)) {
         loners.push(sp);
       }
-    } else if (!node) {
-      // already in loners or groups
     }
   }
 
   const totalGroups = groups.length + (loners.length > 0 ? 1 : 0);
+  const rightBound = inspectOpen ? W - INSPECT_W - 10 : W - 30;
   const worldLeft = 30;
-  const worldRight = W - 30;
+  const worldRight = rightBound;
   const worldTop = MARGIN_TOP + 30;
   const worldBottom = MARGIN_TOP + WORLD_H - 50;
   const worldW = worldRight - worldLeft;
   const worldHH = worldBottom - worldTop;
 
-  // lay out groups in a grid pattern
   const cols = Math.max(1, Math.ceil(Math.sqrt(totalGroups)));
   const rows = Math.ceil(totalGroups / cols);
   const cellW = worldW / cols;
@@ -721,7 +793,6 @@ function layoutSprites() {
     const cy = worldTop + row * cellH + cellH * 0.4;
     grp.manager.setTarget(cx, cy);
 
-    // arrange specialists in a circle around manager
     const n = grp.specialists.length;
     const radius = Math.min(cellW, cellH) * 0.28 + n * 4;
     grp.specialists.forEach((sp, i) => {
@@ -771,9 +842,13 @@ function drawTethers() {
   }
 }
 
-// ---- room zones (drawn behind sprites) ----
+// ---- room zones + labels ----
 function drawRoomZones() {
   const groups = getGroups();
+  let lonerBounds = null;
+  const lonerSprites = getLonerSprites();
+
+  // draw crew rooms
   for (const grp of groups) {
     if (!grp.manager) continue;
     const all = [grp.manager, ...grp.specialists];
@@ -785,6 +860,7 @@ function drawRoomZones() {
     }
     const pad = 30;
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+
     ctx.globalAlpha = 0.06;
     ctx.fillStyle = PALETTE.cyan;
     roundRect(ctx, minX, minY, maxX-minX, maxY-minY, 14);
@@ -795,6 +871,52 @@ function drawRoomZones() {
     roundRect(ctx, minX, minY, maxX-minX, maxY-minY, 14);
     ctx.stroke();
     ctx.globalAlpha = 1;
+
+    // room label above zone
+    const node = treeNodes.get(grp.manager.id) || {};
+    const rawGoal = node.goal || grp.manager.goal || '';
+    const labelText = rawGoal.length > 40 ? rawGoal.slice(0, 38) + '..' : (rawGoal || 'crew ' + grp.manager.id.slice(0, 8));
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillStyle = '#8a93a0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(labelText, (minX + maxX) / 2, minY + 2);
+    ctx.restore();
+  }
+
+  // draw loner zone
+  if (lonerSprites.length > 0) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const sp of lonerSprites) {
+      minX = Math.min(minX, sp.x); minY = Math.min(minY, sp.y);
+      maxX = Math.max(maxX, sp.x); maxY = Math.max(maxY, sp.y);
+    }
+    const pad = 28;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    ctx.globalAlpha = 0.04;
+    ctx.fillStyle = '#8a93a0';
+    roundRect(ctx, minX, minY, maxX-minX, maxY-minY, 14);
+    ctx.fill();
+    ctx.globalAlpha = 0.08;
+    ctx.strokeStyle = '#8a93a0';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3,5]);
+    roundRect(ctx, minX, minY, maxX-minX, maxY-minY, 14);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+
+    // loner zone label
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.font = '9px ui-monospace, monospace';
+    ctx.fillStyle = '#8a93a0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('free agents', (minX + maxX) / 2, minY + 2);
+    ctx.restore();
   }
 }
 
@@ -812,7 +934,183 @@ function getGroups() {
   return result;
 }
 
-// ---- popover ----
+function getLonerSprites() {
+  const loners = [];
+  for (const [id, sp] of sprites) {
+    const node = treeNodes.get(id);
+    if (!node) { loners.push(sp); continue; }
+    if (node.parent_id) {
+      if (!sprites.has(node.parent_id)) loners.push(sp);
+      continue;
+    }
+    // root with no children and not manager
+    const children = [...sprites.values()].filter(s => {
+      const n = treeNodes.get(s.id);
+      return n && n.parent_id === id;
+    });
+    if (children.length === 0 && node.kind !== 'manager') loners.push(sp);
+  }
+  return loners;
+}
+
+// ---- minimap ----
+const MM = { x: 0, y: 0, w: 120, h: 80, pad: 6 };
+const MINIMAP_THRESHOLD = 12;
+
+function drawMinimap() {
+  const total = sprites.size;
+  if (total < MINIMAP_THRESHOLD && W >= WORLD_W && H >= (WORLD_H + MARGIN_TOP + MARGIN_BOT)) {
+    // skip if not many agents and world fits viewport
+    // but still draw if we have >8 for orientation
+    if (total < 8) return;
+  }
+
+  // position: bottom-left corner (above launcher, inside wall)
+  MM.x = 16;
+  MM.y = MARGIN_TOP + WORLD_H - MM.h - 16;
+
+  // background
+  ctx.save();
+  ctx.globalAlpha = 0.75;
+  ctx.fillStyle = 'rgba(5,8,15,0.85)';
+  roundRect(ctx, MM.x, MM.y, MM.w, MM.h, 6);
+  ctx.fill();
+  ctx.globalAlpha = 0.4;
+  ctx.strokeStyle = PALETTE.cyan;
+  ctx.lineWidth = 1;
+  roundRect(ctx, MM.x, MM.y, MM.w, MM.h, 6);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // label
+  ctx.font = '7px ui-monospace, monospace';
+  ctx.fillStyle = '#5a7fa0';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('MAP', MM.x + 4, MM.y + 3);
+
+  // dots for each agent
+  const worldLeft = 30, worldRight = W - 30;
+  const worldTop = MARGIN_TOP + 30;
+  const worldBottom = MARGIN_TOP + WORLD_H - 50;
+  const innerW = MM.w - MM.pad * 2;
+  const innerH = MM.h - MM.pad * 2 - 10;
+
+  for (const [id, sp] of sprites) {
+    if (sp.alpha <= 0) continue;
+    const nx = (sp.x - worldLeft) / (worldRight - worldLeft);
+    const ny = (sp.y - worldTop) / (worldBottom - worldTop);
+    const dotX = MM.x + MM.pad + nx * innerW;
+    const dotY = MM.y + MM.pad + 10 + ny * innerH;
+    const r = sp.isManager() ? 3 : 2;
+    ctx.globalAlpha = sp.alpha * 0.9;
+    ctx.fillStyle = STATE_COLOR[sp.state] || PALETTE.cyan;
+    ctx.beginPath(); ctx.arc(dotX, dotY, r, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// ---- inspect panel ----
+let inspectedId = null;
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.appendChild(document.createTextNode(String(s || '')));
+  return d.innerHTML;
+}
+
+function safeText(node, value) {
+  node.textContent = String(value || '');
+}
+
+function openInspect(sp) {
+  inspectedId = sp.id;
+  inspectOpen = true;
+  const panel = document.getElementById('inspect');
+  panel.classList.add('open');
+  document.getElementById('inspect-title').textContent = sp.id;
+  const node = treeNodes.get(sp.id) || {};
+  const meta = document.getElementById('inspect-meta');
+  meta.textContent = (node.kind || sp.kind || 'agent') + ' | ' + (sp.state || '').toLowerCase() + (node.goal ? ' | ' + node.goal.slice(0, 40) : '');
+
+  const body = document.getElementById('inspect-body');
+  const loadEl = document.getElementById('inspect-loading');
+  const emptyEl = document.getElementById('inspect-empty');
+  body.innerHTML = '';
+  body.appendChild(loadEl);
+  body.appendChild(emptyEl);
+  loadEl.style.display = '';
+  emptyEl.style.display = 'none';
+
+  fetch('/transcript?agent=' + encodeURIComponent(sp.id))
+    .then(r => r.json())
+    .then(j => {
+      loadEl.style.display = 'none';
+      const events = (j.transcript || []).slice(-30);
+      if (events.length === 0) {
+        emptyEl.style.display = '';
+        return;
+      }
+      for (const ev of events) {
+        const d = ev.event || {};
+        const el = document.createElement('div');
+        if (d.type === 'message') {
+          el.className = 'ev-msg';
+          const who = document.createElement('div');
+          who.className = 'ev-who';
+          who.textContent = 'agent says:';
+          const txt = document.createElement('div');
+          txt.className = 'ev-text';
+          txt.textContent = (d.content || '').slice(0, 400);
+          el.appendChild(who);
+          el.appendChild(txt);
+        } else if (d.type === 'tool_result') {
+          el.className = 'ev-tool';
+          const tn = document.createElement('div');
+          tn.className = 'ev-tname';
+          tn.textContent = 'tool: ' + (d.tool || '');
+          const tout = document.createElement('div');
+          tout.className = 'ev-tout';
+          tout.textContent = (d.output || '').slice(0, 300);
+          el.appendChild(tn);
+          el.appendChild(tout);
+        } else if (d.type === 'spawn') {
+          el.className = 'ev-spawn';
+          el.textContent = 'spawned: ' + (d.child_id || d.agent_id || '');
+        } else if (d.type === 'done') {
+          el.className = 'ev-spawn';
+          el.textContent = 'done' + (d.summary ? ': ' + (d.summary || '').slice(0, 80) : '');
+        } else {
+          el.className = 'ev-spawn';
+          el.textContent = (d.type || 'event') + (d.detail ? ': ' + (d.detail || '').slice(0, 80) : '');
+        }
+        body.insertBefore(el, loadEl);
+      }
+    })
+    .catch(err => {
+      loadEl.style.display = 'none';
+      emptyEl.style.display = '';
+      emptyEl.textContent = 'transcript unavailable';
+    });
+
+  layoutSprites();
+}
+
+function closeInspect() {
+  inspectedId = null;
+  inspectOpen = false;
+  document.getElementById('inspect').classList.remove('open');
+  layoutSprites();
+}
+
+document.getElementById('inspect-close').addEventListener('click', closeInspect);
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && inspectOpen) closeInspect();
+});
+
+// ---- popover (hover) ----
 let popoverTarget = null;
 canvas.addEventListener('mousemove', e => {
   const mx = e.clientX, my = e.clientY;
@@ -838,10 +1136,27 @@ canvas.addEventListener('mousemove', e => {
     pop.style.left = px + 'px';
     pop.style.top = py + 'px';
     pop.style.display = 'block';
+    canvas.style.cursor = 'pointer';
   } else {
     pop.style.display = 'none';
     popoverTarget = null;
+    canvas.style.cursor = '';
   }
+});
+
+canvas.addEventListener('click', e => {
+  const mx = e.clientX, my = e.clientY;
+  for (const [id, sp] of sprites) {
+    const R = sp.isManager() ? 14 : 9;
+    const dx = mx - sp.x, dy = my - sp.y;
+    if (Math.sqrt(dx*dx+dy*dy) < R + 10) {
+      document.getElementById('popover').style.display = 'none';
+      openInspect(sp);
+      return;
+    }
+  }
+  // click on empty canvas closes inspect
+  if (inspectOpen) closeInspect();
 });
 
 // ---- data layer ----
@@ -903,7 +1218,6 @@ async function fetchState() {
       seen.add(a.agent_id);
       upsertSprite(a.agent_id, a.state, a.detail);
     }
-    // remove sprites that are no longer in state and have finished
     for (const [id, sp] of sprites) {
       if (!seen.has(id) && sp.state !== 'DONE' && !sp.fadeOut) {
         sp.state = 'DONE';
@@ -998,8 +1312,7 @@ document.getElementById('goalInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('btnMission').click();
 });
 
-// ---- demo agents for offline testing (shown when /state returns empty) ----
-// They get cleared on first real data.
+// ---- demo agents for offline testing ----
 let demoInjected = false;
 function injectDemoIfEmpty() {
   if (demoInjected) return;
@@ -1029,10 +1342,10 @@ function loop(now) {
   const dt = Math.min((now - lastT) / 16.67, 3);
   lastT = now;
 
-  // clear
   ctx.clearRect(0, 0, W, H);
 
   updateDust();
+  updateCrt();
   drawWorld();
   drawDust();
   drawRoomZones();
@@ -1047,6 +1360,8 @@ function loop(now) {
   for (const sp of sorted) {
     if (!sp.done) sp.draw();
   }
+
+  drawMinimap();
 
   requestAnimationFrame(loop);
 }
