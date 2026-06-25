@@ -547,6 +547,8 @@ def main(argv=None):
     p.add_argument("--session", action="store_true",
                    help="run a long-lived interactive session (reads JSON commands "
                         "from stdin, writes JSON events to stdout)")
+    p.add_argument("--manager", action="store_true",
+                   help="run as a swarm manager (decompose a goal and spawn specialists)")
     p.add_argument("--self-test", action="store_true")
     a = p.parse_args(argv)
     if a.self_test:
@@ -555,6 +557,15 @@ def main(argv=None):
     emit_fn = control_fn = None
     if a.io == "db":
         emit_fn, control_fn = make_db_transport(a.db, a.agent_name)
+    if a.manager:
+        import hearth_swarm  # lazy import to avoid an import cycle
+        if not a.goal:
+            p.error("a goal is required with --manager")
+        final = hearth_swarm.run_manager(a.goal, a.model, a.workspace, db=a.db,
+                                         agent_id=a.agent_name, mode=a.mode,
+                                         ollama_url=a.ollama_url)
+        print(final)
+        return 0
     if a.session and a.goal:
         p.error("--session does not take a positional goal; send goals via stdin")
     if a.session:

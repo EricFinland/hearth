@@ -569,6 +569,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, json.dumps({"error": "prompt required"}), "application/json")
         creds = req.get("creds")
         allowed = ",".join(creds) if isinstance(creds, list) else (creds or "")
+        swarm = bool(req.get("swarm"))
         run_id = "{}-{}".format(name, uuid.uuid4().hex[:8])
         queue_dir = "/var/lib/hearth/queue"
         try:
@@ -577,7 +578,7 @@ class Handler(BaseHTTPRequestHandler):
             final = os.path.join(queue_dir, run_id + ".json")
             with open(tmp, "w") as fh:
                 json.dump({"name": name, "model": model, "prompt": prompt,
-                           "mode": mode, "creds": allowed}, fh)
+                           "mode": mode, "creds": allowed, "swarm": swarm}, fh)
             os.replace(tmp, final)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
