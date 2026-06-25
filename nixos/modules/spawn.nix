@@ -16,7 +16,7 @@ let
       mode="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('mode','bypass'))" "$req")"
       creds="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('creds') or chr(0)*0)" "$req")"
       prompt="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('prompt') or chr(0)*0)" "$req")"
-      swarm="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('swarm') else '')" "$req")"
+      swarm="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('swarm') else chr(0)*0)" "$req")"
       rm -f "$req"
       ws="/var/lib/hearth/agents/$id"
       mkdir -p "$ws"
