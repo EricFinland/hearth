@@ -51,10 +51,12 @@
     <div style="display:flex;gap:6px;margin-top:4px;">
       <button id="agSession" style="flex:1;background:#1c6;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">open session</button>
       <button id="agLaunch" style="flex:1;background:#16324f;color:#cfe6ff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">run in background</button>
+      <button id="agMission" style="flex:1;background:#5fd0ff;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">launch mission</button>
     </div>
     <div id="agMsg" style="font-size:12px;margin-top:6px;"></div>
   </div>
   <div class="card" id="map"><div class="title">agents</div><div id="mapBody"></div></div>
+  <div class="card" id="missions" style="display:none;"><div class="title">missions</div><div id="missionsBody"></div></div>
   <div class="card" id="session" style="display:none;grid-column:2/3;grid-row:1/4;flex-direction:column;">
     <div class="title" style="display:flex;justify-content:space-between;align-items:center;">
       <span>session <span id="sessId" style="color:#8a93a0;"></span></span>
@@ -247,4 +249,34 @@ function decideAction(id,allow){
     body:JSON.stringify({id,allow})}).then(()=>refreshPending());
 }
 setInterval(refreshPending,2500); refreshPending();
+// ---- mission control: render the swarm tree from /tree ----
+const STATE_DOT={SPAWNING:"*",IDLE:"z",THINKING:"?",TOOL_CALL:"+",WAITING_IO:"~",WAITING_APPROVAL:"!?",ERRORED:"!",DONE:"#"};
+async function refreshMissions(){
+  try{
+    const j=await(await fetch("/tree")).json();
+    const nodes=j.nodes||[];
+    const card=document.getElementById("missions");
+    card.style.display=nodes.length?"block":"none";
+    const byParent={};
+    nodes.forEach(n=>{(byParent[n.parent_id||""]=byParent[n.parent_id||""]||[]).push(n);});
+    const line=n=>`<div style="margin:2px 0;"><b style="color:#5fd0ff">${STATE_DOT[n.state]||"?"}</b> ${esc(n.agent_id)} <small style="color:#8a93a0">${esc(n.kind||"")} ${esc((n.state||"").toLowerCase())}</small>${esc(n.goal? " - "+n.goal.slice(0,60):"")}</div>`;
+    const roots=nodes.filter(n=>!n.parent_id);
+    document.getElementById("missionsBody").innerHTML=roots.map(r=>
+      `<div style="border-left:3px solid #16324f;padding-left:8px;margin:6px 0;">${line(r)}<div style="margin-left:14px;">${(byParent[r.agent_id]||[]).map(line).join("")}</div></div>`).join("")||"(no missions yet)";
+  }catch(e){}
+}
+setInterval(refreshMissions,3000); refreshMissions();
+document.getElementById("agMission").onclick=async()=>{
+  const name=document.getElementById("agName").value.trim()||"mission";
+  const model=document.getElementById("agModel").value;
+  const prompt=document.getElementById("agTask").value.trim();
+  const msg=document.getElementById("agMsg");
+  if(!prompt){msg.textContent="enter a goal";return;}
+  msg.textContent="launching mission...";
+  try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,model,prompt,mode:"bypass",swarm:true})});
+    const j=await r.json();
+    if(j.queued){msg.textContent="mission launched: "+j.queued+" (watch missions)";document.getElementById("agTask").value="";}
+    else msg.textContent="error: "+(j.error||"unknown");
+  }catch(e){msg.textContent="error: "+e;}};
 </script></body></html>
