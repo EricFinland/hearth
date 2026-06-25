@@ -25,6 +25,11 @@ RISK = {
     "read_file": "safe",
     "list_files": "safe",
     "current_generation": "safe",
+    "list_generations": "safe",
+    "system_health": "safe",
+    "read_self_config": "safe",
+    "git_status": "safe",
+    "git_diff": "safe",
     "write_file": "edit",
     "run_command": "dangerous",
     "http_request": "dangerous",
@@ -96,6 +101,9 @@ def _self_test():
     assert risk_of("current_generation") == "safe"
     assert decide("plan", "current_generation") == "allow"
     assert decide("auto", "current_generation") == "allow"
+    for t in ("list_generations", "system_health", "read_self_config", "git_status", "git_diff"):
+        assert risk_of(t) == "safe", t
+        assert decide("plan", t) == "allow", t
     print("hearth-permissions self-test OK")
     return 0
 
