@@ -8,15 +8,55 @@ All file/command tools operate inside the per-run workspace and refuse paths tha
 escape it, as defence in depth on top of the systemd sandbox.
 """
 
+import glob
 import html as _htmlmod
 import json
 import os
 import re
+import shutil
 import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
+
+
+def _bin(name, fallback):
+    """Resolve a system binary by PATH, falling back to its NixOS stable path
+    (agents may run as a systemd unit with a minimal PATH)."""
+    return shutil.which(name) or fallback
+
+
+HEARTH_REPO = os.environ.get("HEARTH_REPO", "/home/operator/hearth-desktop")
+_SYSTEM_PROFILES = "/nix/var/nix/profiles"
+
+
+def _meminfo_summary(text):
+    """Parse /proc/meminfo into (used_mb, total_mb)."""
+    vals = {}
+    for ln in (text or "").splitlines():
+        if ":" in ln:
+            k, v = ln.split(":", 1)
+            vals[k.strip()] = v.strip()
+
+    def kb(key):
+        try:
+            return int(vals.get(key, "0").split()[0])
+        except (ValueError, IndexError):
+            return 0
+
+    total = kb("MemTotal")
+    avail = kb("MemAvailable")
+    return (max(total - avail, 0)) // 1024, total // 1024
+
+
+def _repo_join(path):
+    """Resolve a path inside HEARTH_REPO, refusing escapes."""
+    root = os.path.realpath(HEARTH_REPO)
+    full = os.path.realpath(os.path.join(root, (path or "").lstrip("/")))
+    if full != root and not full.startswith(root + os.sep):
+        raise ValueError("path escapes the hearth repo: {}".format(path))
+    return full
 
 class _TextExtractor(HTMLParser):
     _SKIP = {"script", "style", "head", "noscript"}
@@ -255,6 +295,111 @@ def tool_current_generation(args, workspace):
     return "generation={}\nbuilt={}".format(gen, built)
 
 
+def tool_list_generations(args, workspace):
+    """List NixOS system generations (number + build date), newest first,
+    marking the active one with a star."""
+    from datetime import datetime, timezone
+    try:
+        current = _parse_generation(os.readlink(os.path.join(_SYSTEM_PROFILES, "system")))
+    except OSError:
+        current = "unknown"
+    rows = []
+    for link in glob.glob(os.path.join(_SYSTEM_PROFILES, "system-*-link")):
+        num = _parse_generation(os.path.basename(link))
+        if num == "unknown":
+            continue
+        try:
+            ts = datetime.fromtimestamp(os.lstat(link).st_mtime, timezone.utc).isoformat()
+        except OSError:
+            ts = "unknown"
+        rows.append((int(num), ts))
+    if not rows:
+        return "error: no system generations found (not a NixOS host?)"
+    rows.sort(reverse=True)
+    return "\n".join("{}{}  {}".format("* " if str(n) == current else "  ", n, ts)
+                     for n, ts in rows)
+
+
+def tool_system_health(args, workspace):
+    """Report system health: systemd status, failed units, disk, memory, GPU."""
+    parts = []
+    systemctl = _bin("systemctl", "/run/current-system/sw/bin/systemctl")
+    try:
+        st = subprocess.run([systemctl, "is-system-running"],
+                            capture_output=True, text=True, timeout=5)
+        parts.append("system: {}".format((st.stdout or st.stderr or "?").strip()))
+    except (OSError, subprocess.SubprocessError):
+        parts.append("system: unknown")
+    try:
+        failed = subprocess.run([systemctl, "--failed", "--no-legend", "--plain"],
+                                capture_output=True, text=True, timeout=5).stdout
+        names = [ln.split()[0] for ln in failed.splitlines() if ln.strip()]
+        parts.append("failed units: {}{}".format(
+            len(names), (" (" + ", ".join(names[:5]) + ")") if names else ""))
+    except (OSError, subprocess.SubprocessError):
+        parts.append("failed units: unknown")
+    try:
+        du = shutil.disk_usage("/")
+        parts.append("disk /: {}/{} GB used".format(du.used // (1024**3), du.total // (1024**3)))
+    except OSError:
+        pass
+    try:
+        with open("/proc/meminfo") as fh:
+            used, total = _meminfo_summary(fh.read())
+        parts.append("mem: {}/{} MB used".format(used, total))
+    except OSError:
+        pass
+    nvidia = shutil.which("nvidia-smi")
+    if nvidia:
+        try:
+            g = subprocess.run(
+                [nvidia, "--query-gpu=utilization.gpu,memory.used,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5).stdout.strip()
+            if g:
+                parts.append("gpu: " + g.splitlines()[0])
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return "\n".join(parts)
+
+
+def tool_read_self_config(args, workspace):
+    """Read a file from hearth's own configuration repo (the flake source)."""
+    try:
+        full = _repo_join(args.get("path", ""))
+    except ValueError as exc:
+        return "error: {}".format(exc)
+    try:
+        with open(full) as fh:
+            return fh.read()[:MAX_OUT]
+    except OSError as exc:
+        return "error: {}".format(exc)
+
+
+def tool_git_status(args, workspace):
+    """Show git status of hearth's configuration repo."""
+    git = _bin("git", "/run/current-system/sw/bin/git")
+    try:
+        r = subprocess.run([git, "-C", HEARTH_REPO, "status", "--short", "--branch"],
+                           capture_output=True, text=True, timeout=15)
+        return (r.stdout or r.stderr or "(clean)")[:MAX_OUT]
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "error: {}".format(exc)
+
+
+def tool_git_diff(args, workspace):
+    """Show git diff of hearth's configuration repo (optionally for one path)."""
+    git = _bin("git", "/run/current-system/sw/bin/git")
+    cmd = [git, "-C", HEARTH_REPO, "diff"]
+    if args.get("path"):
+        cmd += ["--", args["path"]]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        return (r.stdout or "(no changes)")[:MAX_OUT]
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "error: {}".format(exc)
+
+
 TOOLS = [
     {
         "name": "run_command",
@@ -314,6 +459,37 @@ TOOLS = [
         "description": "Report hearth's active NixOS generation number and its build date. Read-only.",
         "parameters": {"type": "object", "properties": {}},
         "fn": tool_current_generation,
+    },
+    {
+        "name": "list_generations",
+        "description": "List NixOS system generations (number and build date), marking the active one. Read-only.",
+        "parameters": {"type": "object", "properties": {}},
+        "fn": tool_list_generations,
+    },
+    {
+        "name": "system_health",
+        "description": "Report system health: systemd status, failed units, disk, memory, GPU. Read-only.",
+        "parameters": {"type": "object", "properties": {}},
+        "fn": tool_system_health,
+    },
+    {
+        "name": "read_self_config",
+        "description": "Read a file from hearth's own NixOS configuration repo (the flake source). Provide path relative to the repo root.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}},
+                       "required": ["path"]},
+        "fn": tool_read_self_config,
+    },
+    {
+        "name": "git_status",
+        "description": "Show git status of hearth's configuration repo. Read-only.",
+        "parameters": {"type": "object", "properties": {}},
+        "fn": tool_git_status,
+    },
+    {
+        "name": "git_diff",
+        "description": "Show git diff of hearth's configuration repo, optionally for one path. Read-only.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+        "fn": tool_git_diff,
     },
 ]
 
@@ -392,6 +568,18 @@ def _self_test():
     assert _parse_generation("garbage") == "unknown"
     cg = execute_tool("current_generation", {}, ws)
     assert isinstance(cg, str) and cg, cg
+
+    # self-knowledge tools: parsers are exact; tools never crash off-NixOS.
+    assert _meminfo_summary("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\n") == (8000, 16000)
+    try:
+        _repo_join("../../etc/passwd")
+        assert False, "expected escape guard to raise"
+    except ValueError:
+        pass
+    for name in ("list_generations", "system_health", "git_status", "git_diff"):
+        out = execute_tool(name, {}, ws)
+        assert isinstance(out, str) and out, (name, out)
+    assert isinstance(execute_tool("read_self_config", {"path": "flake.nix"}, ws), str)
 
     print("hearth-tools self-test OK")
     return 0
