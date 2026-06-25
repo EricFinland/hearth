@@ -65,7 +65,11 @@ lib.mkIf config.hearth.agents.enable {
         shopt -s nullglob
         for f in /var/lib/hearth/queue/*.json; do
           id="$(${pkgs.coreutils}/bin/basename "$f" .json)"
-          ${pkgs.systemd}/bin/systemctl start "hearth-agent@$id.service" || true
+          # --no-block: do NOT wait for the oneshot to finish. A manager agent
+          # spawns its own children by dropping queue files, so a blocking start
+          # would deadlock (the spawner waits on the manager, the manager waits on
+          # the spawner to start its children).
+          ${pkgs.systemd}/bin/systemctl start --no-block "hearth-agent@$id.service" || true
         done
       '';
     };
