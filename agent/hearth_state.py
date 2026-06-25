@@ -72,6 +72,13 @@ CREATE TABLE IF NOT EXISTS agent_events (
   state    TEXT NOT NULL,
   detail   TEXT
 );
+CREATE TABLE IF NOT EXISTS agent_meta (
+  agent_id   TEXT PRIMARY KEY,
+  parent_id  TEXT,
+  kind       TEXT,
+  goal       TEXT,
+  created_at TEXT NOT NULL
+);
 """
 
 
@@ -124,6 +131,37 @@ def emit_state(agent_id, state, detail="", db=DEFAULT_DB):
     finally:
         con.close()
     return ts
+
+
+def record_meta(agent_id, parent_id, kind, goal, db=DEFAULT_DB):
+    """Record an agent's lineage (parent, kind, originating goal). Upsert so a
+    re-record is harmless. kind is 'manager' | 'specialist' | 'session' | 'worker'."""
+    con = _connect(db)
+    try:
+        con.executescript(SCHEMA)
+        con.execute(
+            "INSERT INTO agent_meta (agent_id, parent_id, kind, goal, created_at) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET "
+            "parent_id=excluded.parent_id, kind=excluded.kind, goal=excluded.goal",
+            (agent_id, parent_id, kind, (goal or "")[:2000], now_iso()))
+        con.commit()
+    finally:
+        con.close()
+
+
+def read_meta(db=DEFAULT_DB):
+    """All recorded agent lineage rows (for the map to draw the tree)."""
+    if not os.path.exists(db):
+        return []
+    con = _connect(db)
+    try:
+        con.executescript(SCHEMA)
+        cur = con.execute(
+            "SELECT agent_id, parent_id, kind, goal, created_at FROM agent_meta ORDER BY created_at")
+        return [{"agent_id": r[0], "parent_id": r[1], "kind": r[2], "goal": r[3] or "",
+                 "created_at": r[4]} for r in cur.fetchall()]
+    finally:
+        con.close()
 
 
 def snapshot(db=DEFAULT_DB):
@@ -210,6 +248,13 @@ def _self_test():
     emit_state("a1", "WAITING_APPROVAL", "needs approval: run_command", db=db)
     snap = {r["agent_id"]: r for r in snapshot(db)}
     assert snap["a1"]["state"] == "WAITING_APPROVAL", snap
+    import tempfile as _tfm
+    mdb = os.path.join(_tfm.mkdtemp(prefix="hearth-meta-"), "m.db")
+    record_meta("mgr-1", None, "manager", "build a thing", db=mdb)
+    record_meta("mgr-1-s1", "mgr-1", "specialist", "do part one", db=mdb)
+    metas = {m["agent_id"]: m for m in read_meta(mdb)}
+    assert metas["mgr-1"]["kind"] == "manager" and metas["mgr-1"]["parent_id"] is None, metas
+    assert metas["mgr-1-s1"]["parent_id"] == "mgr-1", metas
     print("hearth-state self-test OK")
     return 0
 
