@@ -24,6 +24,7 @@ MODES = ("plan", "auto", "bypass")
 RISK = {
     "read_file": "safe",
     "list_files": "safe",
+    "current_generation": "safe",
     "write_file": "edit",
     "run_command": "dangerous",
     "http_request": "dangerous",
@@ -91,6 +92,10 @@ def _self_test():
     assert decide("auto", "web_search") == "gate"
     assert decide("bypass", "web_fetch") == "allow"
     assert decide("plan", "web_search") == "deny"
+    # current_generation is read-only introspection: safe in every mode.
+    assert risk_of("current_generation") == "safe"
+    assert decide("plan", "current_generation") == "allow"
+    assert decide("auto", "current_generation") == "allow"
     print("hearth-permissions self-test OK")
     return 0
 

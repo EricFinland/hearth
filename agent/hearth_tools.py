@@ -230,6 +230,31 @@ def tool_http_request(args, workspace):
         return "error: {}".format(exc)
 
 
+def _parse_generation(target):
+    """Extract the generation number from a system profile link target like
+    'system-123-link'. Returns 'unknown' if it does not match."""
+    m = re.search(r"system-(\d+)-link", target or "")
+    return m.group(1) if m else "unknown"
+
+
+def tool_current_generation(args, workspace):
+    """Report hearth's active NixOS generation number and its build date.
+    Read-only introspection: follows /nix/var/nix/profiles/system."""
+    profile = "/nix/var/nix/profiles/system"
+    try:
+        target = os.readlink(profile)
+    except OSError as exc:
+        return "error: cannot read the system profile ({})".format(exc)
+    gen = _parse_generation(target)
+    link = target if os.path.isabs(target) else os.path.join(os.path.dirname(profile), target)
+    try:
+        from datetime import datetime, timezone
+        built = datetime.fromtimestamp(os.lstat(link).st_mtime, timezone.utc).isoformat()
+    except OSError:
+        built = "unknown"
+    return "generation={}\nbuilt={}".format(gen, built)
+
+
 TOOLS = [
     {
         "name": "run_command",
@@ -283,6 +308,12 @@ TOOLS = [
             "headers": {"type": "object"}, "body": {"type": "string"}},
             "required": ["url"]},
         "fn": tool_http_request,
+    },
+    {
+        "name": "current_generation",
+        "description": "Report hearth's active NixOS generation number and its build date. Read-only.",
+        "parameters": {"type": "object", "properties": {}},
+        "fn": tool_current_generation,
     },
 ]
 
@@ -354,6 +385,14 @@ def _self_test():
             os.environ.pop("HEARTH_ALLOWED_CREDS", None)
         else:
             os.environ["HEARTH_ALLOWED_CREDS"] = old_allow
+
+    # current_generation: parse the generation number, and confirm the tool
+    # never crashes even where the system profile is absent (dev/non-NixOS).
+    assert _parse_generation("system-123-link") == "123"
+    assert _parse_generation("garbage") == "unknown"
+    cg = execute_tool("current_generation", {}, ws)
+    assert isinstance(cg, str) and cg, cg
+
     print("hearth-tools self-test OK")
     return 0
 
