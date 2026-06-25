@@ -16,6 +16,7 @@
     ./modules/mapui.nix
     ./modules/desktop.nix
     ./modules/spawn.nix
+    ./modules/creator.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this
