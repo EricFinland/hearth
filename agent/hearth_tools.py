@@ -400,6 +400,44 @@ def tool_git_diff(args, workspace):
         return "error: {}".format(exc)
 
 
+def tool_write_self_config(args, workspace):
+    """Write (create or overwrite) a file inside hearth's own configuration repo
+    (HEARTH_REPO). Used by self-evolution to edit the flake. Refuses paths that
+    escape the repo."""
+    try:
+        full = _repo_join(args.get("path", ""))
+    except ValueError as exc:
+        return "error: {}".format(exc)
+    content = args.get("content", "")
+    parent = os.path.dirname(full)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    try:
+        with open(full, "w") as fh:
+            fh.write(content)
+    except OSError as exc:
+        return "error: {}".format(exc)
+    return "wrote {} ({} bytes) into the hearth repo".format(args.get("path"), len(content))
+
+
+def tool_nix_check(args, workspace):
+    """Validate hearth's flake by running `nix flake check --no-build` locally on
+    HEARTH_REPO. Read-only (evaluates, does not change the system). Returns a line
+    'nix_check PASS' or 'nix_check FAIL' plus the tail of the output, so an agent
+    can see eval errors and fix them. The repo must be a flake (a flake.nix at its
+    root)."""
+    nix = _bin("nix", "/run/current-system/sw/bin/nix")
+    try:
+        r = subprocess.run(
+            [nix, "--extra-experimental-features", "nix-command flakes",
+             "flake", "check", "--no-build", HEARTH_REPO],
+            capture_output=True, text=True, timeout=1200)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "error: {}".format(exc)
+    tail = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()[-MAX_OUT:]
+    return "nix_check {}\n{}".format("PASS" if r.returncode == 0 else "FAIL", tail)
+
+
 TOOLS = [
     {
         "name": "run_command",
@@ -491,6 +529,20 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
         "fn": tool_git_diff,
     },
+    {
+        "name": "write_self_config",
+        "description": "Write (create or overwrite) a file inside hearth's own NixOS configuration repo, to propose a change to the system. Provide path (relative to the repo root) and content.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"]},
+        "fn": tool_write_self_config,
+    },
+    {
+        "name": "nix_check",
+        "description": "Validate hearth's flake by running nix flake check locally (no build). Use after editing the config to confirm it still evaluates. Read-only.",
+        "parameters": {"type": "object", "properties": {}},
+        "fn": tool_nix_check,
+    },
 ]
 
 _BY_NAME = {t["name"]: t for t in TOOLS}
@@ -580,6 +632,22 @@ def _self_test():
         out = execute_tool(name, {}, ws)
         assert isinstance(out, str) and out, (name, out)
     assert isinstance(execute_tool("read_self_config", {"path": "flake.nix"}, ws), str)
+
+    # self-evolution tools: write into the repo (guarded), and nix_check never crashes.
+    import tempfile as _tfe
+    repo = _tfe.mkdtemp(prefix="hearth-selfrepo-")
+    _old_repo = globals()["HEARTH_REPO"]
+    globals()["HEARTH_REPO"] = repo
+    try:
+        out = execute_tool("write_self_config", {"path": "sub/x.nix", "content": "# hi\n"}, ws)
+        assert "wrote" in out, out
+        with open(os.path.join(repo, "sub", "x.nix")) as fh:
+            assert fh.read() == "# hi\n"
+        assert "escapes" in execute_tool("write_self_config", {"path": "../evil", "content": "x"}, ws)
+        nc = execute_tool("nix_check", {}, ws)
+        assert isinstance(nc, str) and nc, nc  # on dev (no nix) it returns an error string, never crashes
+    finally:
+        globals()["HEARTH_REPO"] = _old_repo
 
     print("hearth-tools self-test OK")
     return 0

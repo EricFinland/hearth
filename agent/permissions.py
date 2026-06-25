@@ -35,6 +35,8 @@ RISK = {
     "http_request": "dangerous",
     "web_search": "dangerous",
     "web_fetch": "dangerous",
+    "nix_check": "safe",
+    "write_self_config": "edit",
 }
 
 
@@ -97,6 +99,10 @@ def _self_test():
     assert decide("auto", "web_search") == "gate"
     assert decide("bypass", "web_fetch") == "allow"
     assert decide("plan", "web_search") == "deny"
+    assert risk_of("nix_check") == "safe"
+    assert risk_of("write_self_config") == "edit"
+    assert decide("plan", "write_self_config") == "deny"  # plan mode changes nothing
+    assert decide("bypass", "write_self_config") == "allow"
     # current_generation is read-only introspection: safe in every mode.
     assert risk_of("current_generation") == "safe"
     assert decide("plan", "current_generation") == "allow"
