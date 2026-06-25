@@ -177,27 +177,33 @@ def run_manager(goal, model, workspace, db=DEFAULT_DB, agent_id="manager", mode=
         emit_fn({"type": "state", "state": s, "detail": detail})
 
     hearth_state.record_meta(agent_id, None, "manager", goal, db=db)
-    state("THINKING", "decomposing the goal")
-    tasks = decompose(goal, model, ollama_url, chat_fn)
-    emit_fn({"type": "message", "role": "manager",
-             "content": "decomposed into {} subtasks: {}".format(
-                 len(tasks), ", ".join(t["name"] for t in tasks))})
-    children = []
-    for i, t in enumerate(tasks):
-        cid = "{}-s{}".format(agent_id, i + 1)
-        hearth_state.record_meta(cid, agent_id, "specialist", t["prompt"], db=db)
-        spawn_fn(cid, t["name"], model, t["prompt"], mode, queue_dir)
-        emit_fn({"type": "spawn", "child": cid, "name": t["name"]})
-        children.append((cid, t["name"]))
-    state("WAITING_IO", "{} specialists running".format(len(children)))
-    collected = collect([c[0] for c in children], db, **collect_kwargs)
-    results = [(name, collected.get(cid, "(no result)")) for cid, name in children]
-    state("THINKING", "synthesizing results")
-    final = synthesize(goal, results, model, ollama_url, chat_fn)
-    emit_fn({"type": "message", "role": "manager", "content": final})
-    emit_fn({"type": "done", "final": final, "error": None})
-    state("DONE", "mission complete")
-    return final
+    try:
+        state("THINKING", "decomposing the goal")
+        tasks = decompose(goal, model, ollama_url, chat_fn)
+        emit_fn({"type": "message", "role": "manager",
+                 "content": "decomposed into {} subtasks: {}".format(
+                     len(tasks), ", ".join(t["name"] for t in tasks))})
+        children = []
+        for i, t in enumerate(tasks):
+            cid = "{}-s{}".format(agent_id, i + 1)
+            hearth_state.record_meta(cid, agent_id, "specialist", t["prompt"], db=db)
+            spawn_fn(cid, t["name"], model, t["prompt"], mode, queue_dir)
+            emit_fn({"type": "spawn", "child": cid, "name": t["name"]})
+            children.append((cid, t["name"]))
+        state("WAITING_IO", "{} specialists running".format(len(children)))
+        collected = collect([c[0] for c in children], db, **collect_kwargs)
+        results = [(name, collected.get(cid, "(no result)")) for cid, name in children]
+        state("THINKING", "synthesizing results")
+        final = synthesize(goal, results, model, ollama_url, chat_fn)
+        emit_fn({"type": "message", "role": "manager", "content": final})
+        emit_fn({"type": "done", "final": final, "error": None})
+        state("DONE", "mission complete")
+        return final
+    except Exception as exc:  # noqa: BLE001 - a failed mission must still end cleanly
+        err = "{}: {}".format(type(exc).__name__, exc)
+        emit_fn({"type": "done", "final": None, "error": err})
+        state("ERRORED", err[:200])
+        return None
 
 
 def _self_test():
