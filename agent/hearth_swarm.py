@@ -18,7 +18,9 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.request
@@ -91,13 +93,26 @@ def synthesize(goal, results, model, ollama_url, chat_fn=None):
 
 
 def _spawn_child(childid, name, model, prompt, mode, queue_dir):
-    """Drop a queue file so hearth-spawn starts a normal specialist worker."""
+    """Drop a queue file for the specialist, then start its unit directly. We do
+    NOT rely on the queue path-watcher here: a manager is itself a running unit,
+    and the watcher does not reliably fire for files a running unit drops, so the
+    children would never start. The child runner guards on the request file
+    existing (`[ -f "$req" ] || exit 0`), so a double-start (watcher plus this
+    explicit start) is harmless."""
     os.makedirs(queue_dir, exist_ok=True)
     tmp = os.path.join(queue_dir, childid + ".json.tmp")
     final = os.path.join(queue_dir, childid + ".json")
     with open(tmp, "w") as fh:
         json.dump({"name": name, "model": model, "prompt": prompt, "mode": mode}, fh)
     os.replace(tmp, final)
+    systemctl = shutil.which("systemctl") or "/run/current-system/sw/bin/systemctl"
+    sudo = shutil.which("sudo") or "/run/wrappers/bin/sudo"
+    try:
+        subprocess.run([sudo, "-n", systemctl, "start", "--no-block",
+                        "hearth-agent@{}.service".format(childid)],
+                       capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def _child_state(db, childid):
