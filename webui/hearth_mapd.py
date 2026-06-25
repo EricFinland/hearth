@@ -107,6 +107,27 @@ def read_snapshot(db):
         con.close()
 
 
+def read_tree(db):
+    """Lineage nodes (agent_meta) joined with current state, for the mission map."""
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(SCHEMA)
+        con.execute("CREATE TABLE IF NOT EXISTS agent_meta ("
+                    "agent_id TEXT PRIMARY KEY, parent_id TEXT, kind TEXT, goal TEXT, created_at TEXT)")
+        cur = con.execute(
+            "SELECT m.agent_id, m.parent_id, m.kind, m.goal, m.created_at, s.state, s.detail "
+            "FROM agent_meta m LEFT JOIN agent_state s ON s.agent_id = m.agent_id "
+            "ORDER BY m.created_at")
+        cols = ["agent_id", "parent_id", "kind", "goal", "created_at", "state", "detail"]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
 def read_events_since(db, last_id, limit=500):
     if not os.path.exists(db):
         return []
@@ -504,6 +525,8 @@ class Handler(BaseHTTPRequestHandler):
             agent = (qs.get("agent") or [""])[0]
             return self._send(200, json.dumps({"transcript": read_transcript(self.db, agent)}),
                               "application/json")
+        if path == "/tree":
+            return self._send(200, json.dumps({"nodes": read_tree(self.db)}), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
@@ -774,6 +797,18 @@ def _self_test():
     assert read_pending(pdb) == [], "decided action should leave the pending list"
     tr = read_transcript(pdb, "bg1")
     assert tr and tr[0]["event"]["type"] == "message", tr
+    import tempfile as _tft
+    tdb = os.path.join(_tft.mkdtemp(prefix="hearth-tree-"), "t.db")
+    con = sqlite3.connect(tdb)
+    con.executescript(SCHEMA)
+    con.execute("CREATE TABLE IF NOT EXISTS agent_meta (agent_id TEXT PRIMARY KEY, parent_id TEXT, kind TEXT, goal TEXT, created_at TEXT)")
+    con.execute("INSERT INTO agent_meta VALUES (?,?,?,?,?)", ("mgr", None, "manager", "do it", _now_iso()))
+    con.execute("INSERT INTO agent_meta VALUES (?,?,?,?,?)", ("mgr-s1", "mgr", "specialist", "part one", _now_iso()))
+    con.execute("INSERT INTO agent_state (agent_id, state, detail, updated_at) VALUES (?,?,?,?)", ("mgr", "WAITING_IO", "2 running", _now_iso()))
+    con.commit(); con.close()
+    nodes = {n["agent_id"]: n for n in read_tree(tdb)}
+    assert nodes["mgr"]["kind"] == "manager" and nodes["mgr"]["state"] == "WAITING_IO", nodes
+    assert nodes["mgr-s1"]["parent_id"] == "mgr" and nodes["mgr-s1"]["state"] is None, nodes
     print("hearth-mapd self-test OK")
     return 0
 
