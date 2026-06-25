@@ -597,6 +597,7 @@ class Handler(BaseHTTPRequestHandler):
         swarm = bool(req.get("swarm"))
         marathon = bool(req.get("marathon"))
         checkin = bool(req.get("checkin"))
+        evolve = bool(req.get("evolve"))
         run_id = "{}-{}".format(name, uuid.uuid4().hex[:8])
         queue_dir = "/var/lib/hearth/queue"
         try:
@@ -606,7 +607,8 @@ class Handler(BaseHTTPRequestHandler):
             with open(tmp, "w") as fh:
                 json.dump({"name": name, "model": model, "prompt": prompt,
                            "mode": mode, "creds": allowed, "swarm": swarm,
-                           "marathon": marathon, "checkin": checkin}, fh)
+                           "marathon": marathon, "checkin": checkin,
+                           "evolve": evolve}, fh)
             os.replace(tmp, final)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")

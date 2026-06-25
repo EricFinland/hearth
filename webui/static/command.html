@@ -64,6 +64,7 @@
       <button id="agLaunch" style="flex:1;background:#16324f;color:#cfe6ff;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">run in background</button>
       <button id="agMission" style="flex:1;background:#5fd0ff;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">launch mission</button>
       <button id="agMarathon" style="flex:1;background:#b08cff;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">marathon</button>
+      <button id="agEvolve" style="flex:1;background:#6fcf7f;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">self-evolve</button>
     </div>
     <div id="agMsg" style="font-size:12px;margin-top:6px;"></div>
   </div>
@@ -302,6 +303,19 @@ document.getElementById("agMarathon").onclick=async()=>{
       body:JSON.stringify({name,model,prompt,mode:"bypass",marathon:true,checkin:true})});
     const j=await r.json();
     if(j.queued){msg.textContent="marathon running: "+j.queued+" (it will DM you on Telegram if configured)";document.getElementById("agTask").value="";}
+    else msg.textContent="error: "+(j.error||"unknown");
+  }catch(e){msg.textContent="error: "+e;}};
+document.getElementById("agEvolve").onclick=async()=>{
+  const name=document.getElementById("agName").value.trim()||"evolve";
+  const model=document.getElementById("agModel").value;
+  const prompt=document.getElementById("agTask").value.trim();
+  const msg=document.getElementById("agMsg");
+  if(!prompt){msg.textContent="describe the change to make to hearth itself";return;}
+  msg.textContent="self-evolving (will validate with nix flake check)...";
+  try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,model,prompt,mode:"bypass",evolve:true})});
+    const j=await r.json();
+    if(j.queued){msg.textContent="self-evolve running: "+j.queued+" (it will branch + validate, never auto-deploy)";document.getElementById("agTask").value="";}
     else msg.textContent="error: "+(j.error||"unknown");
   }catch(e){msg.textContent="error: "+e;}};
 </script></body></html>
