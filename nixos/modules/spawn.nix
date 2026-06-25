@@ -17,12 +17,18 @@ let
       creds="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('creds') or chr(0)*0)" "$req")"
       prompt="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('prompt') or chr(0)*0)" "$req")"
       swarm="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('swarm') else chr(0)*0)" "$req")"
+      marathon="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('marathon') else chr(0)*0)" "$req")"
+      checkin="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('checkin') else chr(0)*0)" "$req")"
       rm -f "$req"
       ws="/var/lib/hearth/agents/$id"
       mkdir -p "$ws"
       [ -n "$creds" ] && export HEARTH_ALLOWED_CREDS="$creds"
       if [ -n "$swarm" ]; then
         exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --manager --agent-name "$id" --model "$model" --mode "$mode" --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
+      fi
+      if [ -n "$marathon" ]; then
+        ck=""; [ -n "$checkin" ] && ck="--checkin"
+        exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --marathon $ck --agent-name "$id" --model "$model" --mode "$mode" --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
       fi
       exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --agent-name "$id" --model "$model" --mode "$mode" --io db --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
     '';

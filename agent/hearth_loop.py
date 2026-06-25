@@ -549,6 +549,10 @@ def main(argv=None):
                         "from stdin, writes JSON events to stdout)")
     p.add_argument("--manager", action="store_true",
                    help="run as a swarm manager (decompose a goal and spawn specialists)")
+    p.add_argument("--marathon", action="store_true",
+                   help="run loop-until-done (work in rounds until the goal is complete)")
+    p.add_argument("--checkin", action="store_true",
+                   help="marathon: DM progress and wait for a Telegram reply each round")
     p.add_argument("--self-test", action="store_true")
     a = p.parse_args(argv)
     if a.self_test:
@@ -564,6 +568,15 @@ def main(argv=None):
         final = hearth_swarm.run_manager(a.goal, a.model, a.workspace, db=a.db,
                                          agent_id=a.agent_name, mode=a.mode,
                                          ollama_url=a.ollama_url)
+        print(final)
+        return 0
+    if a.marathon:
+        import hearth_marathon  # lazy import to avoid a cycle
+        if not a.goal:
+            p.error("a goal is required with --marathon")
+        final = hearth_marathon.run_marathon(a.goal, a.model, a.workspace, db=a.db,
+                                             agent_id=a.agent_name, mode=a.mode,
+                                             ollama_url=a.ollama_url, checkin=a.checkin)
         print(final)
         return 0
     if a.session and a.goal:
