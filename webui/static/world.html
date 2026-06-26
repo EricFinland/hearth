@@ -188,6 +188,10 @@
   .pr-b.danger { background: rgba(224,106,106,0.1); color: #e06a6a; border-color: #5a2a2a; }
   .pr-b.danger:hover { border-color: #e06a6a; }
   #pr-status { font-size: 10px; color: #9fb6cc; margin-top: 6px; white-space: pre-wrap; }
+  #pr-history { margin-top: 6px; font-size: 10px; }
+  #pr-history .ph { color: #7f93a8; }
+  #pr-history .ph.ok { color: #6fcf7f; }
+  #pr-history .ph.bad { color: #e06a6a; }
   #pr-diff-out { margin-top: 6px; max-height: 220px; overflow: auto; background: #070d17;
     border: 1px solid #0e2236; border-radius: 6px; padding: 6px; font-size: 10px;
     color: #9fb6cc; white-space: pre; }
@@ -261,6 +265,7 @@
       <button id="pr-rollback" class="pr-b">rollback</button>
     </div>
     <div id="pr-status">idle</div>
+    <div id="pr-history"></div>
     <pre id="pr-diff-out" style="display:none"></pre>
   </div>
 </div>
@@ -1496,6 +1501,15 @@ async function refreshPromoteStatus() {
     if (s.running) el.textContent = 'running: ' + (s.result || 'in progress') + '\n' + (s.tail || '');
     else if (s.result) el.textContent = 'last: ' + s.result + '\n' + (s.tail || '');
     else el.textContent = 'idle';
+  } catch(e) {}
+  try {
+    const h = (await (await fetch('/promote/history')).json()).history || [];
+    const hist = document.getElementById('pr-history');
+    hist.innerHTML = h.length
+      ? h.map(e => '<div class="ph ' + (e.ok ? 'ok' : 'bad') + '">' +
+          esc((e.ts || '').replace('T', ' ').slice(0, 19)) + '  ' + esc(e.mode) +
+          '  ' + (e.ok ? 'ok' : 'FAILED(' + esc(e.rc) + ')') + '</div>').join('')
+      : '';
   } catch(e) {}
 }
 document.getElementById('pr-diff').onclick = async () => {

@@ -453,6 +453,7 @@ def grow_daemon_action(action):
 LIVE_REPO = "/home/operator/hearth-desktop"
 PROMOTE_UNIT = "hearth-promote.service"
 PROMOTE_STAGE = "/var/lib/hearth/promote-stage"
+PROMOTE_HISTORY = "/var/lib/hearth/promote-history.tsv"
 NIXOS_REBUILD = shutil.which("nixos-rebuild") or "/run/current-system/sw/bin/nixos-rebuild"
 SYSTEMD_RUN = shutil.which("systemd-run") or "/run/current-system/sw/bin/systemd-run"
 JOURNALCTL = shutil.which("journalctl") or "/run/current-system/sw/bin/journalctl"
@@ -522,34 +523,58 @@ def promote_run(mode):
         return False, "bad mode"
     if promote_status()["running"]:
         return False, "a promote action is already running"
-    pfx = "export PATH=/run/current-system/sw/bin:$PATH; set -e; "
     # Export the compounded main branch to a clean stage (the unit runs as root,
     # so trust the operator-owned repo for git; nix reads the stage as a plain
     # path so libgit2 never sees the ownership mismatch).
-    stage = ("rm -rf {s} && mkdir -p {s} && "
-             "git -c safe.directory='*' -C {g} archive main | tar -x -C {s}; ").format(
+    stage = ("rm -rf {s}; mkdir -p {s}; "
+             "git -c safe.directory='*' -C {g} archive main | tar -x -C {s}").format(
                  s=PROMOTE_STAGE, g=GROW_REPO)
     if mode == "build":
-        inner = pfx + stage + "{nrb} build --flake path:{s}#blade".format(nrb=NIXOS_REBUILD, s=PROMOTE_STAGE)
+        body = stage + "; {nrb} build --flake path:{s}#blade".format(nrb=NIXOS_REBUILD, s=PROMOTE_STAGE)
     elif mode == "switch":
         # Copy the staged main over the live config, then activate from live so the
         # live dir stays the source of truth. NixOS keeps the prior generation.
         # Restart the growth daemon afterward so it reseeds on the new live config
         # immediately (the live config just changed), closing the loop promptly.
-        inner = pfx + stage + ("cp -a {s}/. {l}/ && {nrb} switch --flake path:{l}#blade && "
-                               "systemctl restart hearth-grow.service").format(
+        body = stage + ("; cp -a {s}/. {l}/; {nrb} switch --flake path:{l}#blade; "
+                        "systemctl restart hearth-grow.service").format(
             s=PROMOTE_STAGE, l=LIVE_REPO, nrb=NIXOS_REBUILD)
     else:  # rollback
-        inner = pfx + "{nrb} switch --rollback".format(nrb=NIXOS_REBUILD)
+        body = "{nrb} switch --rollback".format(nrb=NIXOS_REBUILD)
+    # Run the body under set -e (so any step's failure aborts), then ALWAYS record
+    # the outcome to the promote history, then exit with the body's real code.
+    inner = ("export PATH=/run/current-system/sw/bin:$PATH; ( set -e; {body} ); rc=$?; "
+             "printf '%s\\t%s\\t%s\\n' \"$(date -Is 2>/dev/null)\" {mode} \"$rc\" >> {hist} 2>/dev/null; "
+             "exit $rc").format(body=body, mode=mode, hist=PROMOTE_HISTORY)
     subprocess.run([SUDO, "-n", SYSTEMCTL, "reset-failed", PROMOTE_UNIT],
                    capture_output=True, text=True)
     try:
         r = subprocess.run([SUDO, "-n", SYSTEMD_RUN, "--unit=hearth-promote",
-                            "--property=Type=oneshot", "/bin/sh", "-lc", inner],
+                            "--property=Type=oneshot", "/bin/sh", "-c", inner],
                            capture_output=True, text=True, timeout=30)
         return r.returncode == 0, (r.stderr or r.stdout or "started").strip()[:300]
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
+
+
+def read_promote_history(limit=12):
+    """Recent promote actions (mode + outcome + time), newest first. Each line is
+    'iso_ts<TAB>mode<TAB>rc' appended by the promote unit when it finishes."""
+    if not os.path.exists(PROMOTE_HISTORY):
+        return []
+    try:
+        with open(PROMOTE_HISTORY, "r") as fh:
+            lines = [l.strip() for l in fh if l.strip()]
+    except OSError:
+        return []
+    out = []
+    for l in lines[-limit:]:
+        parts = l.split("\t")
+        if len(parts) >= 3:
+            out.append({"ts": parts[0], "mode": parts[1],
+                        "ok": parts[2] == "0", "rc": parts[2]})
+    out.reverse()
+    return out
 
 
 def chat_once(base_url, model, messages, timeout=300):
@@ -707,6 +732,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"diff": promote_diff()}), "application/json")
         if path == "/promote/status":
             return self._send(200, json.dumps(promote_status()), "application/json")
+        if path == "/promote/history":
+            return self._send(200, json.dumps({"history": read_promote_history()}), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
