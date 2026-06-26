@@ -476,6 +476,7 @@ def promote_diff(grow_repo=GROW_REPO, live=LIVE_REPO, max_bytes=60000):
         if ex.returncode != 0:
             return "diff unavailable: extract failed"
         r = subprocess.run([DIFF, "-ruN", "--exclude=.hearth-seed-hash", "--exclude=result",
+                            "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=.git",
                             live, tmp], capture_output=True, text=True, timeout=25)
         out = (r.stdout or "").replace(tmp, "main")
     except (OSError, subprocess.SubprocessError) as exc:

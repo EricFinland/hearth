@@ -48,11 +48,15 @@ let
     find "$repo" -mindepth 1 -delete 2>/dev/null || true
     cp -a "$src/." "$repo/" || exit 0
     rm -rf "$repo/.git" "$repo/result" 2>/dev/null || true
+    # Drop Python bytecode so it never lands in the baseline (it is build noise,
+    # not config, and otherwise clutters every promote diff).
+    find "$repo" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+    find "$repo" -name '*.pyc' -delete 2>/dev/null || true
     ( cd "$repo" \
       && git init -q -b main \
       && git config user.name hearth && git config user.email hearth@local \
-      && git add -A && git commit -q -m "reseed: baseline from live config" \
-      && echo '.hearth-seed-hash' >> .git/info/exclude ) || exit 0
+      && printf '%s\n' '.hearth-seed-hash' '__pycache__/' '*.pyc' > .git/info/exclude \
+      && git add -A && git commit -q -m "reseed: baseline from live config" ) || exit 0
     echo "$newhash" > "$marker" || true
   '';
 in
