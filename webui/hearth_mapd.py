@@ -452,23 +452,38 @@ def grow_daemon_action(action):
 
 LIVE_REPO = "/home/operator/hearth-desktop"
 PROMOTE_UNIT = "hearth-promote.service"
+PROMOTE_STAGE = "/var/lib/hearth/promote-stage"
 NIXOS_REBUILD = shutil.which("nixos-rebuild") or "/run/current-system/sw/bin/nixos-rebuild"
 SYSTEMD_RUN = shutil.which("systemd-run") or "/run/current-system/sw/bin/systemd-run"
 JOURNALCTL = shutil.which("journalctl") or "/run/current-system/sw/bin/journalctl"
+DIFF = shutil.which("diff") or "/run/current-system/sw/bin/diff"
+GIT = shutil.which("git") or "/run/current-system/sw/bin/git"
+TAR = shutil.which("tar") or "/run/current-system/sw/bin/tar"
 
 
 def promote_diff(grow_repo=GROW_REPO, live=LIVE_REPO, max_bytes=60000):
-    """Unified diff of what the growth daemon's compounded improvements would
-    change in the live config (grow-repo vs the live config files). Read-only."""
+    """Unified diff of what promoting would change in the live config: the grow
+    repo's compounded main branch vs the live config files. Exports main to a temp
+    dir (mapd runs as operator, who owns the repo) and diffs. Read-only."""
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="hearth-pdiff-")
     try:
-        r = subprocess.run(["diff", "-ruN", "--exclude=.git", "--exclude=.hearth-seed-hash",
-                            "--exclude=result", live, grow_repo],
-                           capture_output=True, text=True, timeout=25)
-        out = r.stdout or ""
+        ar = subprocess.run([GIT, "-C", grow_repo, "archive", "main"],
+                            capture_output=True, timeout=20)
+        if ar.returncode != 0:
+            return "diff unavailable: " + (ar.stderr.decode("utf-8", "replace")[:200] or "no main branch")
+        ex = subprocess.run([TAR, "-x", "-C", tmp], input=ar.stdout, capture_output=True, timeout=20)
+        if ex.returncode != 0:
+            return "diff unavailable: extract failed"
+        r = subprocess.run([DIFF, "-ruN", "--exclude=.hearth-seed-hash", "--exclude=result",
+                            live, tmp], capture_output=True, text=True, timeout=25)
+        out = (r.stdout or "").replace(tmp, "main")
     except (OSError, subprocess.SubprocessError) as exc:
         return "diff failed: {}".format(exc)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     if not out.strip():
-        return "(no differences: the grow repo matches the live config)"
+        return "(no differences: the live config already matches the compounded main)"
     return out[:max_bytes] + ("\n...(truncated)" if len(out) > max_bytes else "")
 
 
@@ -506,14 +521,20 @@ def promote_run(mode):
         return False, "bad mode"
     if promote_status()["running"]:
         return False, "a promote action is already running"
-    pfx = "export PATH=/run/current-system/sw/bin:$PATH; "
+    pfx = "export PATH=/run/current-system/sw/bin:$PATH; set -e; "
+    # Export the compounded main branch to a clean stage (the unit runs as root,
+    # so trust the operator-owned repo for git; nix reads the stage as a plain
+    # path so libgit2 never sees the ownership mismatch).
+    stage = ("rm -rf {s} && mkdir -p {s} && "
+             "git -c safe.directory='*' -C {g} archive main | tar -x -C {s}; ").format(
+                 s=PROMOTE_STAGE, g=GROW_REPO)
     if mode == "build":
-        inner = pfx + "{nrb} build --flake {repo}#blade".format(nrb=NIXOS_REBUILD, repo=GROW_REPO)
+        inner = pfx + stage + "{nrb} build --flake path:{s}#blade".format(nrb=NIXOS_REBUILD, s=PROMOTE_STAGE)
     elif mode == "switch":
-        # Materialize grow-repo main over the live config, then activate. archive|tar
-        # avoids a destructive sync and needs no rsync.
-        inner = pfx + ("git -C {g} archive main | tar -x -C {l} && "
-                       "{nrb} switch --flake {l}#blade").format(g=GROW_REPO, l=LIVE_REPO, nrb=NIXOS_REBUILD)
+        # Copy the staged main over the live config, then activate from live so the
+        # live dir stays the source of truth. NixOS keeps the prior generation.
+        inner = pfx + stage + ("cp -a {s}/. {l}/ && {nrb} switch --flake path:{l}#blade").format(
+            s=PROMOTE_STAGE, l=LIVE_REPO, nrb=NIXOS_REBUILD)
     else:  # rollback
         inner = pfx + "{nrb} switch --rollback".format(nrb=NIXOS_REBUILD)
     subprocess.run([SUDO, "-n", SYSTEMCTL, "reset-failed", PROMOTE_UNIT],
