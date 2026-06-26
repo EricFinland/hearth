@@ -33,6 +33,11 @@
   # the operator's per-user theming/panel/conky/command-toggle (plasma-manager).
   hearth.desktop.enable = true;
 
+  # Always-on self-improvement: the box continuously proposes, implements, and
+  # validates small changes to its own config on isolated branches (never the
+  # live system) and learns from each one. Paced so it does not peg the GPU.
+  hearth.grow.enable = true;
+
   home-manager.useGlobalPkgs = true;
   home-manager.useUserPackages = true;
   home-manager.users.operator = import ../home/operator.nix;

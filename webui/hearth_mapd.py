@@ -380,6 +380,68 @@ def read_transcript(db, agent_id, limit=200):
         return []
 
 
+GROW_REPO = "/var/lib/hearth/grow-repo"
+
+
+def read_growth(db, repo=GROW_REPO, limit=40):
+    """The self-improvement ledger: recent grow lessons (what hearth tried and
+    whether it validated), the validated branches waiting for review, and whether
+    the always-on growth daemon is running. Pure reads; never raises."""
+    daemon = "unknown"
+    try:
+        r = subprocess.run([SYSTEMCTL, "is-active", "hearth-grow.service"],
+                           capture_output=True, text=True, timeout=8)
+        daemon = (r.stdout or r.stderr or "unknown").strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        daemon = "unknown"
+
+    lessons = []
+    validated = 0
+    if os.path.exists(db):
+        try:
+            con = sqlite3.connect(db, timeout=10)
+            try:
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS learnings (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    " ts TEXT, kind TEXT, topic TEXT, insight TEXT, tags TEXT, source TEXT)")
+                cur = con.execute(
+                    "SELECT ts, kind, insight FROM learnings WHERE source='grow' "
+                    "ORDER BY id DESC LIMIT ?", (limit,))
+                for ts, kind, insight in cur.fetchall():
+                    lessons.append({"ts": ts, "kind": kind or "lesson", "insight": insight or ""})
+                validated = con.execute(
+                    "SELECT COUNT(*) FROM learnings WHERE source='grow' AND kind='success'"
+                ).fetchone()[0]
+            finally:
+                con.close()
+        except sqlite3.Error:
+            pass
+
+    branches = []
+    try:
+        git = shutil.which("git") or "/run/current-system/sw/bin/git"
+        r = subprocess.run([git, "-C", repo, "branch", "--list", "hearth-evolve-*",
+                            "--format=%(refname:short)"], capture_output=True, text=True, timeout=8)
+        branches = [b.strip() for b in (r.stdout or "").splitlines() if b.strip()]
+    except (OSError, subprocess.SubprocessError):
+        branches = []
+
+    return {"daemon": daemon, "validated_count": validated,
+            "lessons": lessons, "branches": branches}
+
+
+def grow_daemon_action(action):
+    """Start or stop the always-on growth daemon. Returns (ok, detail)."""
+    if action not in ("start", "stop", "restart"):
+        return False, "bad action"
+    try:
+        r = subprocess.run([SUDO, "-n", SYSTEMCTL, action, "hearth-grow.service"],
+                           capture_output=True, text=True, timeout=20)
+        return r.returncode == 0, (r.stderr or r.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+
+
 def chat_once(base_url, model, messages, timeout=300):
     """Call Ollama /api/chat (non-streaming). Returns (reply_text, tokens_in, tokens_out)."""
     body = json.dumps({"model": model, "messages": messages, "stream": False}).encode()
@@ -529,6 +591,8 @@ class Handler(BaseHTTPRequestHandler):
                               "application/json")
         if path == "/tree":
             return self._send(200, json.dumps({"nodes": read_tree(self.db)}), "application/json")
+        if path == "/growth":
+            return self._send(200, json.dumps(read_growth(self.db)), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
@@ -559,6 +623,10 @@ class Handler(BaseHTTPRequestHandler):
             req = self._read_json_body()
             ok = decide_action(self.db, req.get("id"), bool(req.get("allow")))
             return self._send(200, json.dumps({"ok": ok}), "application/json")
+        if path == "/grow-daemon":
+            req = self._read_json_body()
+            ok, detail = grow_daemon_action(req.get("action") or "")
+            return self._send(200, json.dumps({"ok": ok, "detail": detail}), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "send":
             return self._handle_session_send(parts[1])

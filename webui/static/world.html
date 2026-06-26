@@ -142,6 +142,43 @@
   .ev-spawn { color: #8a93a0; font-size: 10px; font-style: italic; margin: 4px 0; }
   #inspect-loading { padding: 20px 14px; color: #5a7fa0; font-size: 11px; }
   #inspect-empty { padding: 20px 14px; color: #5a7fa0; font-size: 11px; }
+  /* growth ledger panel (left) */
+  #growth {
+    position: fixed; left: 0; top: 44px; bottom: 52px; z-index: 25;
+    width: 340px; background: rgba(5,8,15,0.96); border-right: 1px solid #16324f;
+    display: none; flex-direction: column; overflow: hidden;
+  }
+  #growth.open { display: flex; }
+  #growth-header {
+    padding: 10px 14px 8px; border-bottom: 1px solid #16324f;
+    display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+  }
+  #growth-title { color: #ffb347; font-size: 12px; font-weight: bold; }
+  #growth-close { cursor: pointer; color: #5a7fa0; font-size: 14px; line-height: 1;
+    background: none; border: none; padding: 0; font-family: inherit; }
+  #growth-close:hover { color: #ffb347; }
+  #growth-status {
+    padding: 8px 14px; font-size: 10px; color: #9fb6cc; border-bottom: 1px solid #0e2236;
+    flex-shrink: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  #growth-status .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  #growth-status .on { background: #6fcf7f; box-shadow: 0 0 6px #6fcf7f; }
+  #growth-status .off { background: #e06a6a; }
+  #growth-toggle {
+    margin-left: auto; cursor: pointer; font-family: inherit; font-size: 10px;
+    border: 1px solid #16324f; background: rgba(255,179,71,0.1); color: #ffb347;
+    padding: 3px 9px; border-radius: 6px;
+  }
+  #growth-toggle:hover { border-color: #ffb347; }
+  #growth-body { flex: 1; overflow-y: auto; padding: 8px 14px; font-size: 11px; line-height: 1.5; }
+  .grow-item { margin: 7px 0; padding: 5px 8px; border-radius: 0 4px 4px 0; background: rgba(14,34,54,0.5); }
+  .grow-item.success { border-left: 2px solid #6fcf7f; }
+  .grow-item.failure { border-left: 2px solid #e06a6a; }
+  .grow-item.lesson  { border-left: 2px solid #5fd0ff; }
+  .grow-item .gi-kind { font-size: 9px; text-transform: uppercase; letter-spacing: .06em; color: #8a93a0; }
+  .grow-item .gi-text { color: #cfe6ff; white-space: pre-wrap; word-break: break-word; }
+  #growth-branches { padding: 8px 14px; border-top: 1px solid #0e2236; font-size: 10px; color: #6fcf7f; flex-shrink: 0; max-height: 110px; overflow-y: auto; }
+  #growth-branches .gb-title { color: #8a93a0; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
 </style>
 </head><body>
 <canvas id="c"></canvas>
@@ -176,6 +213,7 @@
   <button class="btn primary" id="btnMission">launch mission</button>
   <button class="btn" id="btnRun">run agent</button>
   <button class="btn" id="btnGrow" title="hearth improves itself on a loop; each idea is branched + validated, never auto-deployed">grow hearth</button>
+  <button class="btn" id="btnLedger" title="watch what hearth has built for itself">ledger</button>
 </div>
 <div id="toast">dispatched</div>
 <div id="popover">
@@ -186,6 +224,21 @@
   <div class="pop-row"><span class="pop-label">detail</span><span class="pop-val" id="popDetail">--</span></div>
   <div class="pop-row"><span class="pop-label">goal</span><span class="pop-val" id="popGoal">--</span></div>
   <div style="margin-top:6px;font-size:9px;color:#3a5a7a">click to inspect</div>
+</div>
+<!-- growth ledger panel (left) -->
+<div id="growth">
+  <div id="growth-header">
+    <span id="growth-title">growth ledger</span>
+    <button id="growth-close">x</button>
+  </div>
+  <div id="growth-status">
+    <span class="dot off" id="growth-dot"></span>
+    <span id="growth-daemon">daemon: --</span>
+    <span id="growth-count" style="color:#6fcf7f"></span>
+    <button id="growth-toggle">start</button>
+  </div>
+  <div id="growth-body"><div style="color:#5a7fa0;padding:14px 0">loading...</div></div>
+  <div id="growth-branches"></div>
 </div>
 <!-- inspect panel (click-to-open) -->
 <div id="inspect">
@@ -1327,6 +1380,62 @@ document.getElementById('btnGrow').onclick = async () => {
 document.getElementById('goalInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('btnMission').click();
 });
+
+// ---- growth ledger ----
+let growthTimer = null;
+async function refreshGrowth() {
+  try {
+    const r = await fetch('/growth');
+    const g = await r.json();
+    const active = (g.daemon === 'active');
+    document.getElementById('growth-dot').className = 'dot ' + (active ? 'on' : 'off');
+    document.getElementById('growth-daemon').textContent = 'daemon: ' + (g.daemon || '--');
+    document.getElementById('growth-count').textContent =
+      (g.validated_count || 0) + ' validated';
+    const tgl = document.getElementById('growth-toggle');
+    tgl.textContent = active ? 'stop' : 'start';
+    tgl.dataset.action = active ? 'stop' : 'start';
+    const body = document.getElementById('growth-body');
+    if (!g.lessons || !g.lessons.length) {
+      body.innerHTML = '<div style="color:#5a7fa0;padding:14px 0">no self-improvement activity yet. start the daemon or click "grow hearth".</div>';
+    } else {
+      body.innerHTML = g.lessons.map(l => {
+        const k = (l.kind || 'lesson').toLowerCase();
+        const cls = (k === 'success' || k === 'failure') ? k : 'lesson';
+        return '<div class="grow-item ' + cls + '"><div class="gi-kind">' + esc(l.kind || 'lesson') +
+          '</div><div class="gi-text">' + esc(l.insight || '') + '</div></div>';
+      }).join('');
+    }
+    const br = document.getElementById('growth-branches');
+    if (g.branches && g.branches.length) {
+      br.innerHTML = '<div class="gb-title">validated branches (review + merge)</div>' +
+        g.branches.map(b => '<div>' + esc(b) + '</div>').join('');
+    } else { br.innerHTML = ''; }
+  } catch(e) { /* keep last view on transient error */ }
+}
+document.getElementById('btnLedger').onclick = () => {
+  const p = document.getElementById('growth');
+  const open = p.classList.toggle('open');
+  if (open) { refreshGrowth(); growthTimer = setInterval(refreshGrowth, 4000); }
+  else if (growthTimer) { clearInterval(growthTimer); growthTimer = null; }
+};
+document.getElementById('growth-close').onclick = () => {
+  document.getElementById('growth').classList.remove('open');
+  if (growthTimer) { clearInterval(growthTimer); growthTimer = null; }
+};
+document.getElementById('growth-toggle').onclick = async (e) => {
+  const action = e.target.dataset.action || 'start';
+  e.target.textContent = '...';
+  try {
+    const r = await fetch('/grow-daemon', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action}),
+    });
+    const j = await r.json();
+    showToast(j.ok ? ('growth daemon ' + action + 'ed') : ('error: ' + (j.detail || 'failed')));
+  } catch(err) { showToast('error: ' + err); }
+  setTimeout(refreshGrowth, 800);
+};
 
 // ---- demo agents for offline testing ----
 let demoInjected = false;

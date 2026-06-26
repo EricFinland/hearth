@@ -17,6 +17,7 @@
     ./modules/desktop.nix
     ./modules/spawn.nix
     ./modules/creator.nix
+    ./modules/grow.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this
