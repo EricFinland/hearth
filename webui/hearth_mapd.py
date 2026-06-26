@@ -450,6 +450,83 @@ def grow_daemon_action(action):
         return False, str(exc)
 
 
+LIVE_REPO = "/home/operator/hearth-desktop"
+PROMOTE_UNIT = "hearth-promote.service"
+NIXOS_REBUILD = shutil.which("nixos-rebuild") or "/run/current-system/sw/bin/nixos-rebuild"
+SYSTEMD_RUN = shutil.which("systemd-run") or "/run/current-system/sw/bin/systemd-run"
+JOURNALCTL = shutil.which("journalctl") or "/run/current-system/sw/bin/journalctl"
+
+
+def promote_diff(grow_repo=GROW_REPO, live=LIVE_REPO, max_bytes=60000):
+    """Unified diff of what the growth daemon's compounded improvements would
+    change in the live config (grow-repo vs the live config files). Read-only."""
+    try:
+        r = subprocess.run(["diff", "-ruN", "--exclude=.git", "--exclude=.hearth-seed-hash",
+                            "--exclude=result", live, grow_repo],
+                           capture_output=True, text=True, timeout=25)
+        out = r.stdout or ""
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "diff failed: {}".format(exc)
+    if not out.strip():
+        return "(no differences: the grow repo matches the live config)"
+    return out[:max_bytes] + ("\n...(truncated)" if len(out) > max_bytes else "")
+
+
+def promote_status():
+    """State of the most recent promote action (the transient hearth-promote unit)."""
+    info = {"running": False, "result": "", "tail": ""}
+    try:
+        r = subprocess.run([SYSTEMCTL, "show", PROMOTE_UNIT,
+                            "-p", "ActiveState", "-p", "Result"],
+                           capture_output=True, text=True, timeout=8)
+        props = dict(x.split("=", 1) for x in (r.stdout or "").splitlines() if "=" in x)
+        info["running"] = props.get("ActiveState") in ("active", "activating")
+        if props.get("ActiveState") and props.get("ActiveState") != "inactive":
+            info["result"] = "{} / {}".format(props.get("ActiveState"), props.get("Result", "?"))
+        elif props.get("Result"):
+            info["result"] = props.get("Result")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        j = subprocess.run([JOURNALCTL, "-u", PROMOTE_UNIT, "--no-pager", "-n", "12", "-o", "cat"],
+                           capture_output=True, text=True, timeout=8)
+        info["tail"] = (j.stdout or "")[-1500:]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return info
+
+
+def promote_run(mode):
+    """Run a promote action as a transient systemd unit (so it survives a mapd
+    restart). build = prove the grow-repo config builds into a real system
+    closure (no activation, the safe default). switch = sync grow-repo into the
+    live config and activate it (NixOS keeps the prior generation for rollback).
+    rollback = switch back to the previous generation. Returns (ok, detail)."""
+    if mode not in ("build", "switch", "rollback"):
+        return False, "bad mode"
+    if promote_status()["running"]:
+        return False, "a promote action is already running"
+    pfx = "export PATH=/run/current-system/sw/bin:$PATH; "
+    if mode == "build":
+        inner = pfx + "{nrb} build --flake {repo}#blade".format(nrb=NIXOS_REBUILD, repo=GROW_REPO)
+    elif mode == "switch":
+        # Materialize grow-repo main over the live config, then activate. archive|tar
+        # avoids a destructive sync and needs no rsync.
+        inner = pfx + ("git -C {g} archive main | tar -x -C {l} && "
+                       "{nrb} switch --flake {l}#blade").format(g=GROW_REPO, l=LIVE_REPO, nrb=NIXOS_REBUILD)
+    else:  # rollback
+        inner = pfx + "{nrb} switch --rollback".format(nrb=NIXOS_REBUILD)
+    subprocess.run([SUDO, "-n", SYSTEMCTL, "reset-failed", PROMOTE_UNIT],
+                   capture_output=True, text=True)
+    try:
+        r = subprocess.run([SUDO, "-n", SYSTEMD_RUN, "--unit=hearth-promote",
+                            "--property=Type=oneshot", "/bin/sh", "-lc", inner],
+                           capture_output=True, text=True, timeout=30)
+        return r.returncode == 0, (r.stderr or r.stdout or "started").strip()[:300]
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+
+
 def chat_once(base_url, model, messages, timeout=300):
     """Call Ollama /api/chat (non-streaming). Returns (reply_text, tokens_in, tokens_out)."""
     body = json.dumps({"model": model, "messages": messages, "stream": False}).encode()
@@ -601,6 +678,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"nodes": read_tree(self.db)}), "application/json")
         if path == "/growth":
             return self._send(200, json.dumps(read_growth(self.db)), "application/json")
+        if path == "/promote/diff":
+            return self._send(200, json.dumps({"diff": promote_diff()}), "application/json")
+        if path == "/promote/status":
+            return self._send(200, json.dumps(promote_status()), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
@@ -634,6 +715,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/grow-daemon":
             req = self._read_json_body()
             ok, detail = grow_daemon_action(req.get("action") or "")
+            return self._send(200, json.dumps({"ok": ok, "detail": detail}), "application/json")
+        if path == "/promote":
+            req = self._read_json_body()
+            ok, detail = promote_run(req.get("mode") or "")
             return self._send(200, json.dumps({"ok": ok, "detail": detail}), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "send":

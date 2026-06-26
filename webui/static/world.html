@@ -179,6 +179,18 @@
   .grow-item .gi-text { color: #cfe6ff; white-space: pre-wrap; word-break: break-word; }
   #growth-branches { padding: 8px 14px; border-top: 1px solid #0e2236; font-size: 10px; color: #6fcf7f; flex-shrink: 0; max-height: 110px; overflow-y: auto; }
   #growth-branches .gb-title { color: #8a93a0; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+  #promote { padding: 8px 14px; border-top: 1px solid #16324f; flex-shrink: 0; }
+  #promote .pr-title { color: #8a93a0; text-transform: uppercase; letter-spacing: .06em; font-size: 9px; margin-bottom: 6px; }
+  .pr-btns { display: flex; gap: 5px; flex-wrap: wrap; }
+  .pr-b { cursor: pointer; font-family: inherit; font-size: 10px; border: 1px solid #16324f;
+    background: rgba(95,208,255,0.08); color: #5fd0ff; padding: 3px 8px; border-radius: 6px; }
+  .pr-b:hover { border-color: #5fd0ff; }
+  .pr-b.danger { background: rgba(224,106,106,0.1); color: #e06a6a; border-color: #5a2a2a; }
+  .pr-b.danger:hover { border-color: #e06a6a; }
+  #pr-status { font-size: 10px; color: #9fb6cc; margin-top: 6px; white-space: pre-wrap; }
+  #pr-diff-out { margin-top: 6px; max-height: 220px; overflow: auto; background: #070d17;
+    border: 1px solid #0e2236; border-radius: 6px; padding: 6px; font-size: 10px;
+    color: #9fb6cc; white-space: pre; }
 </style>
 </head><body>
 <canvas id="c"></canvas>
@@ -240,6 +252,17 @@
   </div>
   <div id="growth-body"><div style="color:#5a7fa0;padding:14px 0">loading...</div></div>
   <div id="growth-branches"></div>
+  <div id="promote">
+    <div class="pr-title">promote to live system</div>
+    <div class="pr-btns">
+      <button id="pr-diff" class="pr-b">review diff</button>
+      <button id="pr-build" class="pr-b">build-check</button>
+      <button id="pr-switch" class="pr-b danger">apply to live</button>
+      <button id="pr-rollback" class="pr-b">rollback</button>
+    </div>
+    <div id="pr-status">idle</div>
+    <pre id="pr-diff-out" style="display:none"></pre>
+  </div>
 </div>
 <!-- inspect panel (click-to-open) -->
 <div id="inspect">
@@ -1442,8 +1465,10 @@ async function refreshGrowth() {
 document.getElementById('btnLedger').onclick = () => {
   const p = document.getElementById('growth');
   const open = p.classList.toggle('open');
-  if (open) { refreshGrowth(); growthTimer = setInterval(refreshGrowth, 4000); }
-  else if (growthTimer) { clearInterval(growthTimer); growthTimer = null; }
+  if (open) {
+    refreshGrowth(); refreshPromoteStatus();
+    growthTimer = setInterval(() => { refreshGrowth(); refreshPromoteStatus(); }, 4000);
+  } else if (growthTimer) { clearInterval(growthTimer); growthTimer = null; }
 };
 document.getElementById('growth-close').onclick = () => {
   document.getElementById('growth').classList.remove('open');
@@ -1462,6 +1487,42 @@ document.getElementById('growth-toggle').onclick = async (e) => {
   } catch(err) { showToast('error: ' + err); }
   setTimeout(refreshGrowth, 800);
 };
+
+// ---- promote to live ----
+async function refreshPromoteStatus() {
+  try {
+    const s = await (await fetch('/promote/status')).json();
+    const el = document.getElementById('pr-status');
+    if (s.running) el.textContent = 'running: ' + (s.result || 'in progress') + '\n' + (s.tail || '');
+    else if (s.result) el.textContent = 'last: ' + s.result + '\n' + (s.tail || '');
+    else el.textContent = 'idle';
+  } catch(e) {}
+}
+document.getElementById('pr-diff').onclick = async () => {
+  const out = document.getElementById('pr-diff-out');
+  if (out.style.display === 'block') { out.style.display = 'none'; return; }
+  out.style.display = 'block';
+  out.textContent = 'loading diff...';
+  try {
+    const j = await (await fetch('/promote/diff')).json();
+    out.textContent = j.diff || '(no diff)';
+  } catch(e) { out.textContent = 'error: ' + e; }
+};
+async function promote(mode, confirmMsg) {
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  document.getElementById('pr-status').textContent = mode + ' starting...';
+  try {
+    const j = await (await fetch('/promote', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({mode})})).json();
+    showToast(j.ok ? ('promote ' + mode + ' started') : ('error: ' + (j.detail || 'failed')));
+  } catch(e) { showToast('error: ' + e); }
+  setTimeout(refreshPromoteStatus, 1200);
+}
+document.getElementById('pr-build').onclick = () => promote('build');
+document.getElementById('pr-switch').onclick = () => promote('switch',
+  'Apply the growth daemon\'s compounded improvements to the LIVE system and activate them?\n\nNixOS keeps the current generation, so you can roll back. Recommended: run build-check first.');
+document.getElementById('pr-rollback').onclick = () => promote('rollback',
+  'Roll the live system back to the previous NixOS generation?');
 
 // ---- demo agents for offline testing ----
 let demoInjected = false;
