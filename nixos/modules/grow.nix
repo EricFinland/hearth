@@ -17,16 +17,35 @@ let
   cfg = config.hearth.grow;
   growRepo = "/var/lib/hearth/grow-repo";
 
-  # Seed the grow repo once from the live config so the daemon starts evolving
-  # from the current system. The guard means we never clobber accumulated
-  # branches/lessons on restart; reseeding is a deliberate manual `rm -rf`.
+  # Seed the grow repo from the live config, and AUTO-RESEED whenever the live
+  # config has changed since the last seed (a content hash detects it). This
+  # keeps the daemon grounded: after the operator promotes improvements to live
+  # (or a deploy lands), the grow repo re-baselines on the new reality so it
+  # builds on current config instead of drifting from a stale baseline. Between
+  # changes the repo persists and keeps compounding. Unpromoted scratch branches
+  # are discarded on reseed (promoted work is already in live; lessons persist in
+  # the audit db). Best-effort: a failure here must not block the daemon, so it
+  # never exits non-zero.
+  coreutils = pkgs.coreutils;
   seed = pkgs.writeShellScript "hearth-grow-seed" ''
-    set -eu
+    PATH=${coreutils}/bin:${pkgs.findutils}/bin:${pkgs.git}/bin:$PATH
     src="${cfg.sourceRepo}"
-    if [ ! -e "${growRepo}/flake.nix" ] && [ -e "$src/flake.nix" ]; then
-      ${pkgs.coreutils}/bin/mkdir -p "${growRepo}"
-      ${pkgs.coreutils}/bin/cp -a "$src/." "${growRepo}/"
+    repo="${growRepo}"
+    marker="/var/lib/hearth/grow-seed-hash"
+    [ -e "$src/flake.nix" ] || exit 0
+    newhash="$(cd "$src" && find . -type f -not -path './.git/*' -not -path './result*' \
+      | LC_ALL=C sort | xargs -r sha1sum 2>/dev/null | sha1sum | cut -d' ' -f1)"
+    if [ -e "$repo/flake.nix" ] && [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$newhash" ]; then
+      exit 0  # live config unchanged since last seed: keep the compounded repo
     fi
+    # (re)seed: fresh baseline = current live config
+    rm -rf "$repo" && mkdir -p "$repo" && cp -a "$src/." "$repo/" || exit 0
+    rm -rf "$repo/.git" "$repo/result"
+    ( cd "$repo" \
+      && git init -q -b main \
+      && git config user.name hearth && git config user.email hearth@local \
+      && git add -A && git commit -q -m "reseed: baseline from live config" ) || exit 0
+    echo "$newhash" > "$marker" || true
   '';
 in
 {
