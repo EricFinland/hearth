@@ -7,7 +7,7 @@
 let
   toggle = pkgs.writeShellApplication {
     name = "hearth-command-toggle";
-    runtimeInputs = [ pkgs.firefox pkgs.procps ];
+    runtimeInputs = [ pkgs.google-chrome pkgs.procps ];
     text = builtins.readFile ../modules/desktop-assets/hearth-command-toggle.sh;
   };
 in
@@ -65,7 +65,7 @@ in
   xdg.desktopEntries.hearth = {
     name = "hearth";
     comment = "Local LLM and agent cockpit";
-    exec = "${pkgs.firefox}/bin/firefox --new-window --class hearth-app --app=http://localhost:8770/world";
+    exec = "${pkgs.google-chrome}/bin/google-chrome-stable --user-data-dir=%h/.hearth-app-profile --app=http://localhost:8770/world --no-first-run --no-default-browser-check";
     terminal = false;
     categories = [ "Utility" "Development" ];
   };
