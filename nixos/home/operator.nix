@@ -65,7 +65,7 @@ in
   xdg.desktopEntries.hearth = {
     name = "hearth";
     comment = "Local LLM and agent cockpit";
-    exec = "${pkgs.google-chrome}/bin/google-chrome-stable --user-data-dir=%h/.hearth-app-profile --app=http://localhost:8770/world --no-first-run --no-default-browser-check";
+    exec = "${pkgs.google-chrome}/bin/google-chrome-stable --user-data-dir=/home/operator/.hearth-app-profile --app=http://localhost:8770/world --no-first-run --no-default-browser-check";
     terminal = false;
     categories = [ "Utility" "Development" ];
   };
