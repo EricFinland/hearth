@@ -29,7 +29,10 @@ hearth.desktop.enable = true;
 - The per-user theme, wallpaper, panel, and shortcuts are declared with
   plasma-manager in `nixos/home/operator.nix`, so the look is reproducible, not
   hand-configured.
-- `Meta+A` toggles the [command center](/hearth/operations/command-center/).
+- The [world view](/hearth/operations/world-view/) cockpit opens automatically at
+  login (and from a desktop icon) in a dedicated Chrome app window, and `Meta+A`
+  toggles a fullscreen view. Both use their own Chrome profile so they never fight
+  your normal browser session.
 
 ## Interaction with the boot dashboard
 

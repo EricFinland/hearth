@@ -162,6 +162,35 @@ screen. Off by default; a headless VM does not need it. See
 
 The user auto-logged into the Plasma session at boot.
 
+## hearth.grow.enable
+
+- **Type:** boolean
+- **Default:** `false`
+- **Module:** `nixos/modules/grow.nix`
+
+Enables the always-on [growth daemon](/hearth/concepts/autonomy/#growth-daemon)
+that proposes, validates, and compounds small self-improvements. Opt-in.
+
+## hearth.grow.* (other options)
+
+- **Module:** `nixos/modules/grow.nix`
+
+| Option | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `hearth.grow.model` | string | `"qwen2.5-coder"` | The local model the growth loop uses. |
+| `hearth.grow.sourceRepo` | string | `"/home/operator/hearth-desktop"` | The live config the grow repo is seeded from. |
+| `hearth.grow.cyclesPerRun` | int | `12` | Self-improvement cycles per service run before it restarts. |
+| `hearth.grow.restartSec` | int | `300` | Pause between growth runs, so the box is not pegged. |
+
+## hearth.creator.enable
+
+- **Type:** boolean
+- **Default:** `true`
+- **Module:** `nixos/modules/creator.nix`
+
+Installs the local [content toolchain](/hearth/reference/content-toolchain/)
+(ffmpeg, yt-dlp, imagemagick, sox, piper-tts). Set `false` to leave it out.
+
 ## A note on the agent runtime and spawn
 
 The agent runtime (`hearth.agents.enable`, default `true`) also provides the

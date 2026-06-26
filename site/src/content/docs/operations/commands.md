@@ -50,8 +50,8 @@ It is plain Python with no third-party dependencies, so the audit path and
 ### `hearth-loop`
 
 The tool-using agent loop. Give a model a goal and a workspace; it calls tools
-(run commands, read and write files, make HTTP requests) until the goal is done
-or it hits the iteration cap. The run is sandboxed and audited. See
+until the goal is done or it hits the iteration cap. The run is governed by a
+[permission mode](/hearth/concepts/permission-modes/) and audited. See
 [Agent engine](/hearth/concepts/agent-engine/).
 
 ```sh
@@ -60,6 +60,17 @@ hearth-loop --model qwen2.5-coder --agent-name builder --workspace DIR "GOAL"
 # run the loop against a mock model, no Ollama needed
 hearth-loop --self-test
 ```
+
+Key flags: `--mode plan|auto|bypass`, `--auto-allow <cmds>`, and a mode selector
+for the [higher-order runs](/hearth/concepts/autonomy/):
+
+| Flag | Mode |
+| --- | --- |
+| `--session` | Interactive session driven over stdin. |
+| `--manager` | Swarm: decompose, spawn specialists, synthesize. |
+| `--marathon` (`--checkin`, `--max-rounds`) | Loop until judged done, optionally with Telegram check-ins. |
+| `--evolve` | Propose a config change, gate on `nix flake check`, commit a branch. |
+| `--grow` (`--max-cycles`) | The always-on self-improvement loop. |
 
 ### `hearth-dashboard`
 
@@ -104,3 +115,17 @@ journalctl -u hearth-sandbox-selftest --no-pager
 A boot oneshot that initializes the audit database schema by calling
 `hearth-agent --init-db`. You do not normally run it by hand; it runs on
 activation so the schema exists before any agent does.
+
+### `hearth-grow` (optional)
+
+The always-on [growth daemon](/hearth/concepts/autonomy/#growth-daemon), present
+when [`hearth.grow.enable`](/hearth/reference/configuration/#hearthgrowenable) is
+set. It restarts on a timer to keep proposing and compounding self-improvements.
+
+```sh
+systemctl status hearth-grow
+journalctl -u hearth-grow --no-pager
+```
+
+You can also start, stop, or restart it from the cockpit's ledger panel
+(`POST /grow-daemon`).

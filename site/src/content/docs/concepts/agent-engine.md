@@ -33,18 +33,28 @@ like any other run. See [Observability & audit](/hearth/concepts/observability/)
 
 Tools live in a pluggable registry (`agent/hearth_tools.py`). Each tool has a
 name, a description, a JSON schema for its parameters, and a function that takes
-`(args, workspace)`. The built-in tools are:
+`(args, workspace)`. Each is also assigned a
+[risk class](/hearth/concepts/permission-modes/#risk-classes) that decides whether
+it runs freely, needs approval, or is denied in a given mode.
 
-| Tool | What it does |
-| --- | --- |
-| `run_command` | Run a shell command in the workspace (build, test, inspect). Times out after a limit. |
-| `write_file` | Create or overwrite a file in the workspace. |
-| `read_file` | Read a file from the workspace. |
-| `list_files` | List files in a workspace directory. |
-| `http_request` | Make an HTTP request to an external API (url, method, headers, body). |
+| Tool | What it does | Risk |
+| --- | --- | --- |
+| `read_file` | Read a file from the workspace. | safe |
+| `list_files` | List files in a workspace directory. | safe |
+| `write_file` | Create or overwrite a file in the workspace. | edit |
+| `run_command` | Run a shell command in the workspace (build, test, inspect). Times out after a limit. | dangerous |
+| `http_request` | Make an HTTP request (url, method, headers, body); resolves `cred:` headers. | dangerous |
+| `web_search` | Search the web (keyless DuckDuckGo) and return title, URL, and snippet. | dangerous |
+| `web_fetch` | Fetch a URL and return it as readable text. | dangerous |
+| `current_generation`, `list_generations`, `system_health` | Report the running NixOS generation, the generation list, and system health. | safe |
+| `read_self_config`, `git_status`, `git_diff` | Read hearth's own config repo, its git status, and diffs. | safe |
+| `nix_check` | Validate the config with `nix flake check --no-build` (no build, no activation). | safe |
+| `write_self_config` | Write a file in hearth's config repo (for self-evolution). | edit |
+| `remember`, `recall` | Write and retrieve lessons in long-term memory. | safe |
 
 Adding a capability is adding one entry to the registry, so the surface an agent
-can touch is explicit and reviewable.
+can touch is explicit and reviewable. The self-knowledge and memory tools are what
+make the [autonomy modes](/hearth/concepts/autonomy/) possible.
 
 ## Containment: the per-run workspace
 
@@ -76,8 +86,9 @@ command center  ->  /var/lib/hearth/queue/<id>.json
                 ->  audited run + live map state
 ```
 
-:::note[On the roadmap]
-A Claude-Code-style control layer (permission modes and live, resumable sessions)
-is specified and planned but not yet built. Today a run executes to completion
-under its sandbox; interactive approval of individual tool calls is the next step.
+:::tip[Now built: permission modes and higher-order runs]
+Runs are governed by [permission modes](/hearth/concepts/permission-modes/) (plan,
+auto, bypass) with per-tool approval, and the engine supports interactive sessions
+plus higher-order modes, swarm, marathon, self-evolve, and an always-on growth
+loop. See [Autonomy & self-improvement](/hearth/concepts/autonomy/).
 :::

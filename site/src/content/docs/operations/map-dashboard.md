@@ -28,20 +28,36 @@ only. See [Networking & remote access](/hearth/reference/networking/).
 
 ## Endpoints
 
-`hearth-mapd` exposes a small HTTP surface:
+`hearth-mapd` exposes the whole cockpit over a plain HTTP surface:
 
-| Method | Route | Returns | Purpose |
-| --- | --- | --- | --- |
-| GET | `/` | HTML | The map page. |
-| GET | `/healthz` | `ok` | Liveness check. |
-| GET | `/state` | JSON | A snapshot of every agent's current state. |
-| GET | `/events` | SSE | A live stream of state changes for the page. |
-| GET | `/stats` | JSON | Live host stats: GPU (via `nvidia-smi`) and memory (from `/proc/meminfo`). |
-| GET | `/models` | JSON | The local Ollama models available. |
-| GET | `/runs` | JSON | Recent runs from the audit database. |
-| GET | `/command` | HTML | The [command center](/hearth/operations/command-center/) page. |
-| POST | `/chat` | JSON | Send a message to a model (Ollama chat); recorded as a run. |
-| POST | `/run` | JSON | Atomically enqueue a sandboxed agent launch request. |
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/world` | The [world view](/hearth/operations/world-view/) cockpit (the default). |
+| GET | `/command` | The [command center](/hearth/operations/command-center/) page. |
+| GET | `/` | The original map page. |
+| GET | `/healthz` | Liveness check. |
+| GET | `/state` | Snapshot of every agent's current state. |
+| GET | `/events` | Live SSE stream of state changes. |
+| GET | `/stats` | Live host stats: GPU and memory. |
+| GET | `/models` | The local Ollama models available. |
+| GET | `/runs` | Recent runs from the audit database. |
+| GET | `/tree` | Agent lineage (manager and specialists) for the mission tree. |
+| GET | `/pending` | Tool calls awaiting approval. |
+| GET | `/transcript?agent=<id>` | The step-by-step transcript for one worker. |
+| GET | `/growth` | The self-improvement ledger (status, lessons, branches). |
+| GET | `/promote/diff`, `/promote/status`, `/promote/history` | What promotion would change, its status, and recent runs. |
+| POST | `/chat` | Send a message to a model (Ollama chat); recorded as a run. |
+| POST | `/run` | Enqueue an agent run (with mode, creds, and swarm/marathon/evolve/grow flags). |
+| POST | `/session`, `/session/<sid>/send`, GET `/session/<sid>/events` | Open and drive an interactive session. |
+| POST | `/decide` | Approve or deny a pending tool call (`{ id, allow }`). |
+| POST | `/stop-all` | Kill switch: stop every session and worker, deny all pending. |
+| POST | `/grow-daemon` | Start, stop, or restart the growth daemon. |
+| POST | `/promote` | Build, switch, or roll back the live system. |
+
+These power the [permission approvals](/hearth/concepts/permission-modes/), the
+[autonomy modes](/hearth/concepts/autonomy/), and the
+[command center](/hearth/operations/command-center/) and
+[world view](/hearth/operations/world-view/).
 
 The `/stats` endpoint returns `{ "gpu": ..., "mem": ... }`. GPU data comes from
 `nvidia-smi` when it is present (name, utilization, memory used and total) and is

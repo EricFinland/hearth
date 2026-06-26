@@ -11,9 +11,12 @@ description: What hearth does today, the differentiators, and what is captured f
 - Sandboxed execution: agents run as ephemeral DynamicUser processes with ProtectSystem=strict and NoNewPrivileges.
 - Run-level observability: every agent run records tokens, cost, latency, and errors to a local SQLite database.
 - Boot dashboard: a TUI that shows system state, model status, and recent runs on login.
-- Tool-using agent loop: `hearth-loop` gives a model a goal and tools (run commands, read and write files, HTTP), runs it in a per-run workspace, and audits it. See [Agent engine](/hearth/concepts/agent-engine/).
-- Web command center: chat with a local model and launch sandboxed agents from the browser. See [Command center](/hearth/operations/command-center/).
-- Optional KDE Plasma desktop for hosts with a screen. See [Desktop](/hearth/reference/desktop/).
+- Tool-using agent loop: `hearth-loop` gives a model a goal and tools (run commands, read and write files, HTTP, web search and fetch), runs it in a per-run workspace, and audits it. See [Agent engine](/hearth/concepts/agent-engine/).
+- Permission modes with per-tool approval (plan, auto, bypass), a pending-approval queue, and a one-button kill switch. See [Permission modes](/hearth/concepts/permission-modes/).
+- Autonomy modes: a swarm that decomposes and parallelizes, a marathon that loops until done, self-evolution gated on `nix flake check`, and an always-on growth daemon that compounds validated improvements. See [Autonomy](/hearth/concepts/autonomy/).
+- Self-learning memory: agents record and recall lessons so the system gets smarter over time.
+- Web command center and an animated [world view](/hearth/operations/world-view/): chat, launch agents, and watch them work in the browser.
+- Optional KDE Plasma desktop and a fully-local [content toolchain](/hearth/reference/content-toolchain/) (ffmpeg, yt-dlp, TTS) for on-box media agents.
 
 ## Differentiators
 

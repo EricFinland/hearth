@@ -54,3 +54,19 @@ This keeps the [sandbox](/hearth/concepts/sandboxing/) guarantee intact: a
 prompt-injected agent that tries to exfiltrate "the OpenAI key" has nothing to
 read. It can only ask for a header to be filled in by name, and that substitution
 happens outside the model.
+
+## Per-run scoping
+
+A run can be limited to a subset of the credentials, so an agent that only needs
+GitHub cannot reach your Stripe key even by name. When you launch from the
+cockpit, the optional credential filter sets `HEARTH_ALLOWED_CREDS` for that run
+(a comma-separated allow-list).
+
+- If `HEARTH_ALLOWED_CREDS` is set, only names in the list resolve; every other
+  `cred:` name resolves to empty.
+- If it is unset, all names resolve.
+
+So the launch decides the reach: pick `github_token` for a run and that is the
+only credential it can use, no matter what the model asks for. This pairs with the
+[permission modes](/hearth/concepts/permission-modes/) to scope both *what* a run
+can do and *which* secrets it can touch.
