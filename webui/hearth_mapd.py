@@ -534,7 +534,10 @@ def promote_run(mode):
     elif mode == "switch":
         # Copy the staged main over the live config, then activate from live so the
         # live dir stays the source of truth. NixOS keeps the prior generation.
-        inner = pfx + stage + ("cp -a {s}/. {l}/ && {nrb} switch --flake path:{l}#blade").format(
+        # Restart the growth daemon afterward so it reseeds on the new live config
+        # immediately (the live config just changed), closing the loop promptly.
+        inner = pfx + stage + ("cp -a {s}/. {l}/ && {nrb} switch --flake path:{l}#blade && "
+                               "systemctl restart hearth-grow.service").format(
             s=PROMOTE_STAGE, l=LIVE_REPO, nrb=NIXOS_REBUILD)
     else:  # rollback
         inner = pfx + "{nrb} switch --rollback".format(nrb=NIXOS_REBUILD)

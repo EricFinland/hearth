@@ -100,6 +100,24 @@ def merge_validated(repo, branch, nix_check_fn=None, git_fn=None):
     return False, "post-merge nix check failed; reverted, left as a branch"
 
 
+def prune_branches(repo, git_fn=None):
+    """Delete evolve branches already merged into main (their improvements now
+    live in main, so the branch is redundant), keeping the repo and the ledger's
+    branch list lean. Unmerged branches (failed or pending) are kept for review.
+    Returns the number deleted."""
+    git_fn = git_fn or (lambda *a: hearth_evolve._git(repo, *a))
+    git_fn("checkout", "main")
+    r = git_fn("branch", "--merged", "main", "--list", "hearth-evolve-*")
+    if getattr(r, "returncode", 1) != 0:
+        return 0
+    deleted = 0
+    for line in (getattr(r, "stdout", "") or "").splitlines():
+        b = line.strip().lstrip("*").strip()
+        if b and b != "main" and git_fn("branch", "-D", b).returncode == 0:
+            deleted += 1
+    return deleted
+
+
 def _default_notifier():
     """Build a Telegram notifier from the resolved credentials, or a no-op if none
     are configured. The growth daemon stays silent until a token + chat are set
@@ -120,7 +138,8 @@ def _default_notifier():
 def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
                repo=None, max_cycles=MAX_CYCLES, pause_s=CYCLE_PAUSE_S,
                propose_fn=None, evolve_fn=None, recall_fn=None, remember_fn=None,
-               emit_fn=None, sleep_fn=None, compound=True, merge_fn=None, notify_fn=None):
+               emit_fn=None, sleep_fn=None, compound=True, merge_fn=None, notify_fn=None,
+               prune_fn=None):
     """Run the continuous self-improvement loop for up to max_cycles cycles.
 
     Returns a summary string. Each cycle recalls lessons, proposes one
@@ -135,6 +154,8 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
         merge_fn = lambda branch: merge_validated(repo, branch)  # noqa: E731
     if notify_fn is None:
         notify_fn = _default_notifier()
+    if compound and prune_fn is None:
+        prune_fn = lambda: prune_branches(repo)  # noqa: E731
     if emit_fn is None:
         emit_fn, _ = hearth_loop.make_db_transport(db, agent_id)
     recall_fn = recall_fn or (lambda q: hearth_memory.recall(db, q, limit=6))
@@ -216,6 +237,15 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
                     "avoid this approach".format(idea), "failure")
             if pause_s:
                 sleep_fn(pause_s)
+        # Tidy up: drop evolve branches already folded into main so the repo and
+        # the ledger's branch list stay lean.
+        if prune_fn:
+            try:
+                pruned = prune_fn()
+                if pruned:
+                    say("pruned {} merged branch(es)".format(pruned))
+            except Exception:  # noqa: BLE001
+                pass
         summary = ("growth loop finished {} cycles: {} validated ({} merged into main), "
                    "{} failed validation".format(max_cycles, validated, merged, failed))
         emit_fn({"type": "done", "final": summary, "error": None})
@@ -320,9 +350,9 @@ def _self_test():
     # merge_validated: success (merge ok + check PASS), conflict (merge nonzero),
     # and post-merge failure (check FAIL -> revert). git/nix are injected.
     class _R:
-        def __init__(self, rc=0):
+        def __init__(self, rc=0, stdout=""):
             self.returncode = rc
-            self.stdout = ""
+            self.stdout = stdout
             self.stderr = ""
     calls = []
 
@@ -353,17 +383,33 @@ def _self_test():
     merges = []
     rem3 = []
     notes = []
+    pruned_calls = []
     msg3 = run_growth("m", db=db, agent_id="cgrow", repo=d, max_cycles=2, pause_s=0,
                       propose_fn=lambda lc, at: "idea {}".format(len(merges)),
                       evolve_fn=lambda g, c: "ok",
                       merge_fn=lambda branch: (merges.append(branch) or True, "merged into main"),
                       notify_fn=lambda text: notes.append(text),
+                      prune_fn=lambda: (pruned_calls.append(1) or 1),
                       recall_fn=lambda q: [], remember_fn=lambda i, k: rem3.append((k, i)),
                       emit_fn=lambda e: None, sleep_fn=lambda s: None)
     assert merges == ["hearth-evolve-cgrow-c1", "hearth-evolve-cgrow-c2"], merges
     assert "2 merged into main" in msg3, msg3
     assert sum("merged a self-improvement" in n for n in notes) == 2, notes
     assert any("growth batch done" in n for n in notes), notes
+    assert pruned_calls, "prune runs after the batch"
+
+    # prune_branches: deletes only the evolve branches merged into main.
+    pcalls = []
+
+    def gf_prune(*a):
+        pcalls.append(a)
+        if a[:2] == ("branch", "--merged"):
+            return _R(0, "  hearth-evolve-x\n* main\n  hearth-evolve-y\n")
+        return _R(0)
+    ndel = prune_branches("/repo", git_fn=gf_prune)
+    assert ndel == 2, (ndel, pcalls)
+    assert ("branch", "-D", "hearth-evolve-x") in pcalls, pcalls
+    assert not any(a == ("branch", "-D", "main") for a in pcalls), "never deletes main"
 
     # _default_notifier with no creds is a safe no-op callable (never crashes).
     n = _default_notifier()
