@@ -20,6 +20,7 @@ let
       marathon="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('marathon') else chr(0)*0)" "$req")"
       checkin="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('checkin') else chr(0)*0)" "$req")"
       evolve="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('evolve') else chr(0)*0)" "$req")"
+      grow="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('grow') else chr(0)*0)" "$req")"
       rm -f "$req"
       ws="/var/lib/hearth/agents/$id"
       mkdir -p "$ws"
@@ -33,6 +34,9 @@ let
       fi
       if [ -n "$evolve" ]; then
         exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --evolve --agent-name "$id" --model "$model" --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
+      fi
+      if [ -n "$grow" ]; then
+        exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --grow --agent-name "$id" --model "$model" --workspace "$ws" --db /var/lib/hearth/runs/audit.db
       fi
       exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --agent-name "$id" --model "$model" --mode "$mode" --io db --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
     '';

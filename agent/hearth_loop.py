@@ -553,6 +553,10 @@ def main(argv=None):
                    help="run loop-until-done (work in rounds until the goal is complete)")
     p.add_argument("--evolve", action="store_true",
                    help="self-evolve: propose a change to hearth's own config and validate it builds")
+    p.add_argument("--grow", action="store_true",
+                   help="growth loop: continuously propose, implement, and validate self-improvements")
+    p.add_argument("--max-cycles", type=int, default=25,
+                   help="grow: number of self-improvement cycles before stopping")
     p.add_argument("--checkin", action="store_true",
                    help="marathon: DM progress and wait for a Telegram reply each round")
     p.add_argument("--self-test", action="store_true")
@@ -588,6 +592,12 @@ def main(argv=None):
         msg = hearth_evolve.run_evolve(a.goal, a.model, db=a.db, agent_id=a.agent_name,
                                        ollama_url=a.ollama_url)
         print(msg or "self-evolve did not produce a valid branch")
+        return 0
+    if a.grow:
+        import hearth_grow  # lazy import to avoid a cycle
+        summary = hearth_grow.run_growth(a.model, db=a.db, agent_id=a.agent_name,
+                                         ollama_url=a.ollama_url, max_cycles=a.max_cycles)
+        print(summary)
         return 0
     if a.session and a.goal:
         p.error("--session does not take a positional goal; send goals via stdin")

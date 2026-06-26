@@ -65,6 +65,7 @@
       <button id="agMission" style="flex:1;background:#5fd0ff;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">launch mission</button>
       <button id="agMarathon" style="flex:1;background:#b08cff;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">marathon</button>
       <button id="agEvolve" style="flex:1;background:#6fcf7f;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">self-evolve</button>
+      <button id="agGrow" style="flex:1;background:#ffb347;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">grow hearth</button>
     </div>
     <div id="agMsg" style="font-size:12px;margin-top:6px;"></div>
   </div>
@@ -316,6 +317,18 @@ document.getElementById("agEvolve").onclick=async()=>{
       body:JSON.stringify({name,model,prompt,mode:"bypass",evolve:true})});
     const j=await r.json();
     if(j.queued){msg.textContent="self-evolve running: "+j.queued+" (it will branch + validate, never auto-deploy)";document.getElementById("agTask").value="";}
+    else msg.textContent="error: "+(j.error||"unknown");
+  }catch(e){msg.textContent="error: "+e;}};
+
+document.getElementById("agGrow").onclick=async()=>{
+  const name=document.getElementById("agName").value.trim()||"grow";
+  const model=document.getElementById("agModel").value;
+  const msg=document.getElementById("agMsg");
+  msg.textContent="growth loop starting (hearth improves itself; each idea is branched + validated, never auto-deployed)...";
+  try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,model,mode:"bypass",grow:true})});
+    const j=await r.json();
+    if(j.queued)msg.textContent="growth loop running: "+j.queued+" (validated branches will appear for review)";
     else msg.textContent="error: "+(j.error||"unknown");
   }catch(e){msg.textContent="error: "+e;}};
 </script></body></html>

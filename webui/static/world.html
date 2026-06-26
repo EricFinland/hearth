@@ -175,6 +175,7 @@
   <input id="goalInput" placeholder="give the facility a goal..." />
   <button class="btn primary" id="btnMission">launch mission</button>
   <button class="btn" id="btnRun">run agent</button>
+  <button class="btn" id="btnGrow" title="hearth improves itself on a loop; each idea is branched + validated, never auto-deployed">grow hearth</button>
 </div>
 <div id="toast">dispatched</div>
 <div id="popover">
@@ -1305,6 +1306,21 @@ document.getElementById('btnRun').onclick = async () => {
     } else {
       showToast('error: ' + (j.error || 'unknown'));
     }
+  } catch(e) { showToast('error: ' + e); }
+};
+
+document.getElementById('btnGrow').onclick = async () => {
+  await fetchModels();
+  const model = models[0] || 'llama3.2:3b';
+  try {
+    const r = await fetch('/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: 'grow', model, mode: 'bypass', grow: true}),
+    });
+    const j = await r.json();
+    if (j.queued) showToast('growth loop running: hearth is improving itself');
+    else showToast('error: ' + (j.error || 'unknown'));
   } catch(e) { showToast('error: ' + e); }
 };
 

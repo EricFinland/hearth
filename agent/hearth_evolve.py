@@ -23,6 +23,7 @@ import hearth_state  # noqa: E402
 import hearth_loop  # noqa: E402
 import hearth_tools  # noqa: E402
 import hearth_telegram  # noqa: E402
+import hearth_memory  # noqa: E402
 
 DEFAULT_DB = "/var/lib/hearth/runs/audit.db"
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
@@ -44,7 +45,7 @@ def _git(repo, *args, timeout=180):
 def run_evolve(goal, model, db=DEFAULT_DB, agent_id="evolve", ollama_url=DEFAULT_OLLAMA,
                repo=None, max_rounds=MAX_ROUNDS, branch=None, turn_chat_fn=None,
                nix_check_fn=None, git_fn=None, emit_fn=None, tg_send=None,
-               tg_token=None, tg_chat=None):
+               tg_token=None, tg_chat=None, recall_fn=None):
     """Propose + locally-validate a self-change on a branch. Returns a success
     message, or None if it could not reach a valid config."""
     repo = repo or hearth_tools.HEARTH_REPO
@@ -60,6 +61,7 @@ def run_evolve(goal, model, db=DEFAULT_DB, agent_id="evolve", ollama_url=DEFAULT
     if tg_chat is None:
         tg_chat = hearth_tools._resolve_cred("telegram_chat") or os.environ.get("TELEGRAM_CHAT_ID", "")
     tg_send = tg_send or hearth_telegram.send
+    recall_fn = recall_fn or (lambda q: hearth_memory.recall(db, q, limit=5))
 
     # Point the self-config tools at this repo for the duration of the run.
     os.environ["HEARTH_REPO"] = repo
@@ -90,7 +92,15 @@ def run_evolve(goal, model, db=DEFAULT_DB, agent_id="evolve", ollama_url=DEFAULT
                    "commit", "-m", "baseline")
         git_fn("checkout", "-B", branch)
 
-        messages = [{"role": "system", "content": EVOLVE_SYS},
+        # Auto-recall: fold relevant lessons from past runs into the system
+        # prompt so the model does not repeat mistakes it already learned from.
+        lessons_ctx = ""
+        try:
+            lessons_ctx = hearth_memory.as_context(recall_fn(goal + " nix flake"))
+        except Exception:  # noqa: BLE001
+            lessons_ctx = ""
+        sys_content = EVOLVE_SYS + ("\n\n" + lessons_ctx if lessons_ctx else "")
+        messages = [{"role": "system", "content": sys_content},
                     {"role": "user", "content": "Change to make: " + goal}]
         st = {"mode": "bypass"}
         last_err = ""

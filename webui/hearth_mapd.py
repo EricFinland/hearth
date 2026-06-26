@@ -590,14 +590,16 @@ class Handler(BaseHTTPRequestHandler):
         mode = req.get("mode") or "bypass"
         if mode not in ("plan", "auto", "bypass"):
             mode = "bypass"
-        if not prompt:
-            return self._send(400, json.dumps({"error": "prompt required"}), "application/json")
         creds = req.get("creds")
         allowed = ",".join(creds) if isinstance(creds, list) else (creds or "")
         swarm = bool(req.get("swarm"))
         marathon = bool(req.get("marathon"))
         checkin = bool(req.get("checkin"))
         evolve = bool(req.get("evolve"))
+        grow = bool(req.get("grow"))
+        # The growth loop generates its own improvement goals, so it needs no prompt.
+        if not prompt and not grow:
+            return self._send(400, json.dumps({"error": "prompt required"}), "application/json")
         run_id = "{}-{}".format(name, uuid.uuid4().hex[:8])
         queue_dir = "/var/lib/hearth/queue"
         try:
@@ -608,7 +610,7 @@ class Handler(BaseHTTPRequestHandler):
                 json.dump({"name": name, "model": model, "prompt": prompt,
                            "mode": mode, "creds": allowed, "swarm": swarm,
                            "marathon": marathon, "checkin": checkin,
-                           "evolve": evolve}, fh)
+                           "evolve": evolve, "grow": grow}, fh)
             os.replace(tmp, final)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
