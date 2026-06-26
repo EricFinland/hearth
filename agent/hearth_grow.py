@@ -27,6 +27,7 @@ import hearth_loop  # noqa: E402
 import hearth_tools  # noqa: E402
 import hearth_memory  # noqa: E402
 import hearth_evolve  # noqa: E402
+import hearth_telegram  # noqa: E402
 
 DEFAULT_DB = "/var/lib/hearth/runs/audit.db"
 DEFAULT_OLLAMA = "http://127.0.0.1:11434"
@@ -98,20 +99,41 @@ def merge_validated(repo, branch, nix_check_fn=None, git_fn=None):
     return False, "post-merge nix check failed; reverted, left as a branch"
 
 
+def _default_notifier():
+    """Build a Telegram notifier from the resolved credentials, or a no-op if none
+    are configured. The growth daemon stays silent until a token + chat are set
+    (same credential channel evolve uses), so this is dormant by default."""
+    token = hearth_tools._resolve_cred("telegram_token") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat = hearth_tools._resolve_cred("telegram_chat") or os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not (token and chat):
+        return lambda text: None
+
+    def notify(text):
+        try:
+            hearth_telegram.send(token, chat, text)
+        except Exception:  # noqa: BLE001
+            pass
+    return notify
+
+
 def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
                repo=None, max_cycles=MAX_CYCLES, pause_s=CYCLE_PAUSE_S,
                propose_fn=None, evolve_fn=None, recall_fn=None, remember_fn=None,
-               emit_fn=None, sleep_fn=None, compound=True, merge_fn=None):
+               emit_fn=None, sleep_fn=None, compound=True, merge_fn=None, notify_fn=None):
     """Run the continuous self-improvement loop for up to max_cycles cycles.
 
     Returns a summary string. Each cycle recalls lessons, proposes one
     improvement, runs evolve to implement + validate it, and records the outcome.
     When compound is set, a validated branch is merged into main (gated by a
     re-check) so the next cycle builds on it instead of a stale baseline.
+    notify_fn (default: Telegram if creds are set, else no-op) receives a short
+    line on each merged improvement and on the batch summary.
     """
     repo = repo or hearth_tools.HEARTH_REPO
     if compound and merge_fn is None:
         merge_fn = lambda branch: merge_validated(repo, branch)  # noqa: E731
+    if notify_fn is None:
+        notify_fn = _default_notifier()
     if emit_fn is None:
         emit_fn, _ = hearth_loop.make_db_transport(db, agent_id)
     recall_fn = recall_fn or (lambda q: hearth_memory.recall(db, q, limit=6))
@@ -172,6 +194,7 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
                         merged += 1
                         outcome = "merged into main (growth compounds)"
                         say("cycle {} MERGED: {}".format(cyc, idea))
+                        notify_fn("hearth merged a self-improvement: " + idea)
                     else:
                         outcome = "kept as branch ({})".format(detail)
                         say("cycle {} kept as branch: {}".format(cyc, detail))
@@ -191,6 +214,9 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
         emit_fn({"type": "done", "final": summary, "error": None})
         state("DONE", "{} validated / {} merged / {} failed".format(validated, merged, failed))
         remember_fn(summary, "lesson")
+        # Only ping on a batch that actually did something, so an idle loop is silent.
+        if validated or failed:
+            notify_fn("hearth growth batch done: " + summary)
         return summary
     except Exception as exc:  # noqa: BLE001
         err = "{}: {}".format(type(exc).__name__, exc)
@@ -311,18 +337,27 @@ def _self_test():
     okf, df = merge_validated("/repo", "br3", nix_check_fn=lambda: "nix_check FAIL\nboom", git_fn=gf_fail)
     assert not okf and reverted, ("post-merge fail must revert", okf, df, reverted)
 
-    # run_growth with an injected merge_fn: validated cycles are merged, the
-    # branch name is derived from the child id, and the summary counts merges.
+    # run_growth with injected merge_fn + notify_fn: validated cycles are merged,
+    # the branch name is derived from the child id, the summary counts merges, and
+    # the notifier gets a line per merge plus the batch summary.
     merges = []
     rem3 = []
+    notes = []
     msg3 = run_growth("m", db=db, agent_id="cgrow", repo=d, max_cycles=2, pause_s=0,
                       propose_fn=lambda lc, at: "idea {}".format(len(merges)),
                       evolve_fn=lambda g, c: "ok",
                       merge_fn=lambda branch: (merges.append(branch) or True, "merged into main"),
+                      notify_fn=lambda text: notes.append(text),
                       recall_fn=lambda q: [], remember_fn=lambda i, k: rem3.append((k, i)),
                       emit_fn=lambda e: None, sleep_fn=lambda s: None)
     assert merges == ["hearth-evolve-cgrow-c1", "hearth-evolve-cgrow-c2"], merges
     assert "2 merged into main" in msg3, msg3
+    assert sum("merged a self-improvement" in n for n in notes) == 2, notes
+    assert any("growth batch done" in n for n in notes), notes
+
+    # _default_notifier with no creds is a safe no-op callable (never crashes).
+    n = _default_notifier()
+    assert n("anything") is None, "no-creds notifier no-ops"
 
     print("hearth-grow self-test OK")
     return 0
