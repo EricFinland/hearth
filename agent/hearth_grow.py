@@ -84,8 +84,9 @@ def merge_validated(repo, branch, nix_check_fn=None, git_fn=None):
     reverts so main is never left broken. Returns (merged_bool, detail)."""
     git_fn = git_fn or (lambda *a: hearth_evolve._git(repo, *a))
     nix_check_fn = nix_check_fn or (lambda: hearth_tools.execute_tool("nix_check", {}, repo))
-    if git_fn("checkout", "main").returncode != 0:
-        return False, "no main branch to merge into"
+    co = git_fn("checkout", "main")
+    if co.returncode != 0:
+        return False, "could not checkout main: " + ((getattr(co, "stderr", "") or "").strip()[:140] or "unknown")
     m = git_fn("-c", "user.name=hearth", "-c", "user.email=hearth@local",
                "merge", "--no-ff", "-m", "grow: merge " + branch, branch)
     if m.returncode != 0:
