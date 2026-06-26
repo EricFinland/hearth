@@ -10,13 +10,20 @@ let
     runtimeInputs = [ pkgs.google-chrome pkgs.procps ];
     text = builtins.readFile ../modules/desktop-assets/hearth-command-toggle.sh;
   };
+  # Idempotent "open" launcher used by the desktop icon, the login autostart, and
+  # the app-menu entry (the Meta+A toggle stays for closing it).
+  hearthOpen = pkgs.writeShellApplication {
+    name = "hearth-open";
+    runtimeInputs = [ pkgs.google-chrome pkgs.procps ];
+    text = builtins.readFile ../modules/desktop-assets/hearth-open.sh;
+  };
 in
 {
   # homeModules is the current name; homeManagerModules is the deprecated alias.
   imports = [ plasma-manager.homeModules.plasma-manager ];
 
   home.stateVersion = "24.11";
-  home.packages = [ toggle pkgs.conky ];
+  home.packages = [ toggle hearthOpen pkgs.conky ];
 
   programs.plasma = {
     enable = true;
@@ -64,11 +71,41 @@ in
 
   xdg.desktopEntries.hearth = {
     name = "hearth";
-    comment = "Local LLM and agent cockpit";
-    exec = "${pkgs.google-chrome}/bin/google-chrome-stable --user-data-dir=/home/operator/.hearth-app-profile --app=http://localhost:8770/world --no-first-run --no-default-browser-check";
+    comment = "Open the hearth AI cockpit";
+    exec = "${hearthOpen}/bin/hearth-open";
+    icon = "applications-science";
     terminal = false;
     categories = [ "Utility" "Development" ];
   };
+
+  # A clickable icon on the desktop itself (Plasma 6 shows ~/Desktop entries) and
+  # a login autostart, so the cockpit is one double-click away or already open.
+  # Both point at the idempotent hearth-open launcher. (Meta+A still toggles it,
+  # but the icon does not depend on the hotkey registering.)
+  home.file."Desktop/hearth.desktop" = {
+    executable = true;
+    text = ''
+      [Desktop Entry]
+      Type=Application
+      Name=hearth
+      Comment=Open the hearth AI cockpit
+      Exec=${hearthOpen}/bin/hearth-open
+      Icon=applications-science
+      Terminal=false
+      Categories=Utility;Development;
+    '';
+  };
+  home.file.".config/autostart/hearth.desktop".text = ''
+    [Desktop Entry]
+    Type=Application
+    Name=hearth cockpit
+    Comment=Open the hearth cockpit on login
+    Exec=${hearthOpen}/bin/hearth-open
+    Icon=applications-science
+    Terminal=false
+    X-KDE-autostart-after=panel
+    X-GNOME-Autostart-enabled=true
+  '';
 
   systemd.user.services.hearth-conky = {
     Unit.Description = "hearth conky desktop readout";
