@@ -532,12 +532,23 @@ def promote_run(mode):
     if mode == "build":
         body = stage + "; {nrb} build --flake path:{s}#blade".format(nrb=NIXOS_REBUILD, s=PROMOTE_STAGE)
     elif mode == "switch":
-        # Copy the staged main over the live config, then activate from live so the
-        # live dir stays the source of truth. NixOS keeps the prior generation.
-        # Restart the growth daemon afterward so it reseeds on the new live config
-        # immediately (the live config just changed), closing the loop promptly.
-        body = stage + ("; cp -a {s}/. {l}/; {nrb} switch --flake path:{l}#blade; "
-                        "systemctl restart hearth-grow.service").format(
+        # Copy the staged main over the live config and activate from live (the
+        # live dir stays the source of truth; NixOS keeps the prior generation).
+        # The switch step is under set -e, so a build failure aborts cleanly with
+        # nothing activated. After a successful activation a WATCHDOG runs (this
+        # unit is independent of mapd/the network, so it survives even if the new
+        # config breaks them): it waits for services to settle and checks the
+        # critical units that guard access (ssh, network, cockpit). If any is
+        # down, it auto-rolls-back to the prior generation; if all are up it makes
+        # the growth daemon reseed on the new live config.
+        body = (stage + "; cp -a {s}/. {l}/; {nrb} switch --flake path:{l}#blade; "
+                "set +e; sleep 12; ok=1; "
+                "for u in sshd.service NetworkManager.service hearth-mapd.service; do "
+                "systemctl is-active --quiet \"$u\" || ok=0; done; "
+                "if [ \"$ok\" = 1 ]; then echo 'health check passed'; "
+                "systemctl restart hearth-grow.service; exit 0; "
+                "else echo 'POST-SWITCH HEALTH CHECK FAILED -> rolling back to previous generation'; "
+                "{nrb} switch --rollback; exit 3; fi").format(
             s=PROMOTE_STAGE, l=LIVE_REPO, nrb=NIXOS_REBUILD)
     else:  # rollback
         body = "{nrb} switch --rollback".format(nrb=NIXOS_REBUILD)

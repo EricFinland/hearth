@@ -1534,7 +1534,7 @@ async function promote(mode, confirmMsg) {
 }
 document.getElementById('pr-build').onclick = () => promote('build');
 document.getElementById('pr-switch').onclick = () => promote('switch',
-  'Apply the growth daemon\'s compounded improvements to the LIVE system and activate them?\n\nNixOS keeps the current generation, so you can roll back. Recommended: run build-check first.');
+  'Apply the growth daemon\'s compounded improvements to the LIVE system and activate them?\n\nA watchdog checks ssh/network/cockpit afterward and auto-rolls-back if the box comes up unhealthy. NixOS also keeps the prior generation. Recommended: run build-check first.');
 document.getElementById('pr-rollback').onclick = () => promote('rollback',
   'Roll the live system back to the previous NixOS generation?');
 
