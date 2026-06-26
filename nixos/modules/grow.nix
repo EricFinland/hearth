@@ -31,20 +31,28 @@ let
     PATH=${coreutils}/bin:${pkgs.findutils}/bin:${pkgs.git}/bin:$PATH
     src="${cfg.sourceRepo}"
     repo="${growRepo}"
-    marker="/var/lib/hearth/grow-seed-hash"
+    # The marker lives INSIDE the repo (operator owns the repo but not its parent
+    # /var/lib/hearth, so it cannot write a sibling file there). It is gitignored
+    # via .git/info/exclude so cycles never commit it.
+    marker="$repo/.hearth-seed-hash"
     [ -e "$src/flake.nix" ] || exit 0
     newhash="$(cd "$src" && find . -type f -not -path './.git/*' -not -path './result*' \
       | LC_ALL=C sort | xargs -r sha1sum 2>/dev/null | sha1sum | cut -d' ' -f1)"
     if [ -e "$repo/flake.nix" ] && [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$newhash" ]; then
       exit 0  # live config unchanged since last seed: keep the compounded repo
     fi
-    # (re)seed: fresh baseline = current live config
-    rm -rf "$repo" && mkdir -p "$repo" && cp -a "$src/." "$repo/" || exit 0
-    rm -rf "$repo/.git" "$repo/result"
+    # (re)seed a fresh baseline from the current live config. Empty the repo IN
+    # PLACE (operator can delete entries within the dir it owns, but cannot remove
+    # the dir itself, which needs write on the parent), then repopulate.
+    mkdir -p "$repo"
+    find "$repo" -mindepth 1 -delete 2>/dev/null || true
+    cp -a "$src/." "$repo/" || exit 0
+    rm -rf "$repo/.git" "$repo/result" 2>/dev/null || true
     ( cd "$repo" \
       && git init -q -b main \
       && git config user.name hearth && git config user.email hearth@local \
-      && git add -A && git commit -q -m "reseed: baseline from live config" ) || exit 0
+      && git add -A && git commit -q -m "reseed: baseline from live config" \
+      && echo '.hearth-seed-hash' >> .git/info/exclude ) || exit 0
     echo "$newhash" > "$marker" || true
   '';
 in
