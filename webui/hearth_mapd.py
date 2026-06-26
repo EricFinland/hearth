@@ -418,15 +418,23 @@ def read_growth(db, repo=GROW_REPO, limit=40):
             pass
 
     branches = []
+    merged = 0
+    git = shutil.which("git") or "/run/current-system/sw/bin/git"
     try:
-        git = shutil.which("git") or "/run/current-system/sw/bin/git"
         r = subprocess.run([git, "-C", repo, "branch", "--list", "hearth-evolve-*",
                             "--format=%(refname:short)"], capture_output=True, text=True, timeout=8)
         branches = [b.strip() for b in (r.stdout or "").splitlines() if b.strip()]
     except (OSError, subprocess.SubprocessError):
         branches = []
+    try:
+        # Improvements that compounded: merge commits the growth loop made on main.
+        r = subprocess.run([git, "-C", repo, "log", "main", "--grep=grow: merge", "--oneline"],
+                          capture_output=True, text=True, timeout=8)
+        merged = len([x for x in (r.stdout or "").splitlines() if x.strip()])
+    except (OSError, subprocess.SubprocessError):
+        merged = 0
 
-    return {"daemon": daemon, "validated_count": validated,
+    return {"daemon": daemon, "validated_count": validated, "merged_count": merged,
             "lessons": lessons, "branches": branches}
 
 

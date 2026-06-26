@@ -76,16 +76,42 @@ def propose_idea(model, ollama_url, lessons_ctx, attempted, chat_fn=None):
     return _clean_idea(content)
 
 
+def merge_validated(repo, branch, nix_check_fn=None, git_fn=None):
+    """Merge a validated branch into main and keep it ONLY if main still passes
+    `nix flake check` afterward, so growth compounds on a known-good baseline
+    (the next cycle then branches from the improved main). Any failure aborts or
+    reverts so main is never left broken. Returns (merged_bool, detail)."""
+    git_fn = git_fn or (lambda *a: hearth_evolve._git(repo, *a))
+    nix_check_fn = nix_check_fn or (lambda: hearth_tools.execute_tool("nix_check", {}, repo))
+    if git_fn("checkout", "main").returncode != 0:
+        return False, "no main branch to merge into"
+    m = git_fn("-c", "user.name=hearth", "-c", "user.email=hearth@local",
+               "merge", "--no-ff", "-m", "grow: merge " + branch, branch)
+    if m.returncode != 0:
+        git_fn("merge", "--abort")
+        return False, "merge conflict; left as a branch"
+    res = nix_check_fn()
+    if isinstance(res, str) and res.strip().startswith("nix_check PASS"):
+        return True, "merged into main"
+    # The combination broke even though the branch passed alone: undo the merge.
+    git_fn("reset", "--hard", "HEAD~1")
+    return False, "post-merge nix check failed; reverted, left as a branch"
+
+
 def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
                repo=None, max_cycles=MAX_CYCLES, pause_s=CYCLE_PAUSE_S,
                propose_fn=None, evolve_fn=None, recall_fn=None, remember_fn=None,
-               emit_fn=None, sleep_fn=None):
+               emit_fn=None, sleep_fn=None, compound=True, merge_fn=None):
     """Run the continuous self-improvement loop for up to max_cycles cycles.
 
     Returns a summary string. Each cycle recalls lessons, proposes one
     improvement, runs evolve to implement + validate it, and records the outcome.
+    When compound is set, a validated branch is merged into main (gated by a
+    re-check) so the next cycle builds on it instead of a stale baseline.
     """
     repo = repo or hearth_tools.HEARTH_REPO
+    if compound and merge_fn is None:
+        merge_fn = lambda branch: merge_validated(repo, branch)  # noqa: E731
     if emit_fn is None:
         emit_fn, _ = hearth_loop.make_db_transport(db, agent_id)
     recall_fn = recall_fn or (lambda q: hearth_memory.recall(db, q, limit=6))
@@ -112,6 +138,7 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
 
     attempted = []
     validated = 0
+    merged = 0
     failed = 0
     try:
         hearth_state.record_meta(agent_id, None, "growth", "continuous self-improvement", db=db)
@@ -134,9 +161,23 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
             if result:
                 validated += 1
                 say("cycle {} VALIDATED: {} (branch ready for review)".format(cyc, idea))
+                outcome = "validated branch"
+                if merge_fn:
+                    branch = "hearth-evolve-" + child_id
+                    try:
+                        ok, detail = merge_fn(branch)
+                    except Exception as mexc:  # noqa: BLE001
+                        ok, detail = False, "merge error: {}".format(mexc)
+                    if ok:
+                        merged += 1
+                        outcome = "merged into main (growth compounds)"
+                        say("cycle {} MERGED: {}".format(cyc, idea))
+                    else:
+                        outcome = "kept as branch ({})".format(detail)
+                        say("cycle {} kept as branch: {}".format(cyc, detail))
                 remember_fn(
-                    "SUCCESS: improvement '{}' implemented and passed nix flake check "
-                    "(validated branch from {})".format(idea, child_id), "success")
+                    "SUCCESS: improvement '{}' passed nix flake check; {} (from {})".format(
+                        idea, outcome, child_id), "success")
             else:
                 failed += 1
                 say("cycle {} failed validation: {}".format(cyc, idea))
@@ -145,10 +186,10 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
                     "avoid this approach".format(idea), "failure")
             if pause_s:
                 sleep_fn(pause_s)
-        summary = ("growth loop finished {} cycles: {} validated improvements (branches "
-                   "ready for review), {} failed validation".format(max_cycles, validated, failed))
+        summary = ("growth loop finished {} cycles: {} validated ({} merged into main), "
+                   "{} failed validation".format(max_cycles, validated, merged, failed))
         emit_fn({"type": "done", "final": summary, "error": None})
-        state("DONE", "{} validated / {} failed".format(validated, failed))
+        state("DONE", "{} validated / {} merged / {} failed".format(validated, merged, failed))
         remember_fn(summary, "lesson")
         return summary
     except Exception as exc:  # noqa: BLE001
@@ -209,7 +250,7 @@ def _self_test():
 
     events = []
     msg = run_growth("m", db=db, agent_id="grow", repo=d, max_cycles=3, pause_s=0,
-                     propose_fn=propose, evolve_fn=evolve, recall_fn=recall,
+                     compound=False, propose_fn=propose, evolve_fn=evolve, recall_fn=recall,
                      remember_fn=remember, emit_fn=events.append, sleep_fn=lambda s: None)
     assert "3 cycles" in msg and "2 validated" in msg and "1 failed" in msg, msg
     assert len(evolved) == 3, ("evolve runs once per cycle", evolved)
@@ -239,6 +280,49 @@ def _self_test():
                emit_fn=lambda e: None, sleep_fn=lambda s: None)
     assert ev2 == [], "no idea -> no evolve"
     assert any(k == "failure" for k, _ in rem2), rem2
+
+    # merge_validated: success (merge ok + check PASS), conflict (merge nonzero),
+    # and post-merge failure (check FAIL -> revert). git/nix are injected.
+    class _R:
+        def __init__(self, rc=0):
+            self.returncode = rc
+            self.stdout = ""
+            self.stderr = ""
+    calls = []
+
+    def gf_ok(*a):
+        calls.append(a)
+        return _R(0)
+    ok, _ = merge_validated("/repo", "br1", nix_check_fn=lambda: "nix_check PASS\nok", git_fn=gf_ok)
+    assert ok, "merge + passing check -> merged"
+    assert ("checkout", "main") in calls and any("merge" in a for a in calls), calls
+
+    def gf_conflict(*a):
+        return _R(1 if ("merge" in a and "--abort" not in a) else 0)
+    okc, dc = merge_validated("/repo", "br2", nix_check_fn=lambda: "nix_check PASS", git_fn=gf_conflict)
+    assert not okc and "conflict" in dc, (okc, dc)
+
+    reverted = []
+
+    def gf_fail(*a):
+        if a[0] == "reset":
+            reverted.append(a)
+        return _R(0)
+    okf, df = merge_validated("/repo", "br3", nix_check_fn=lambda: "nix_check FAIL\nboom", git_fn=gf_fail)
+    assert not okf and reverted, ("post-merge fail must revert", okf, df, reverted)
+
+    # run_growth with an injected merge_fn: validated cycles are merged, the
+    # branch name is derived from the child id, and the summary counts merges.
+    merges = []
+    rem3 = []
+    msg3 = run_growth("m", db=db, agent_id="cgrow", repo=d, max_cycles=2, pause_s=0,
+                      propose_fn=lambda lc, at: "idea {}".format(len(merges)),
+                      evolve_fn=lambda g, c: "ok",
+                      merge_fn=lambda branch: (merges.append(branch) or True, "merged into main"),
+                      recall_fn=lambda q: [], remember_fn=lambda i, k: rem3.append((k, i)),
+                      emit_fn=lambda e: None, sleep_fn=lambda s: None)
+    assert merges == ["hearth-evolve-cgrow-c1", "hearth-evolve-cgrow-c2"], merges
+    assert "2 merged into main" in msg3, msg3
 
     print("hearth-grow self-test OK")
     return 0

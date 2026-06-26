@@ -235,6 +235,7 @@
     <span class="dot off" id="growth-dot"></span>
     <span id="growth-daemon">daemon: --</span>
     <span id="growth-count" style="color:#6fcf7f"></span>
+    <span id="growth-merged" style="color:#ffb347"></span>
     <button id="growth-toggle">start</button>
   </div>
   <div id="growth-body"><div style="color:#5a7fa0;padding:14px 0">loading...</div></div>
@@ -1392,6 +1393,8 @@ async function refreshGrowth() {
     document.getElementById('growth-daemon').textContent = 'daemon: ' + (g.daemon || '--');
     document.getElementById('growth-count').textContent =
       (g.validated_count || 0) + ' validated';
+    document.getElementById('growth-merged').textContent =
+      (g.merged_count || 0) + ' merged';
     const tgl = document.getElementById('growth-toggle');
     tgl.textContent = active ? 'stop' : 'start';
     tgl.dataset.action = active ? 'stop' : 'start';
