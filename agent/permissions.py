@@ -37,6 +37,8 @@ RISK = {
     "web_fetch": "dangerous",
     "nix_check": "safe",
     "write_self_config": "edit",
+    "remember": "safe",
+    "recall": "safe",
 }
 
 
@@ -110,6 +112,8 @@ def _self_test():
     for t in ("list_generations", "system_health", "read_self_config", "git_status", "git_diff"):
         assert risk_of(t) == "safe", t
         assert decide("plan", t) == "allow", t
+    assert risk_of("remember") == "safe" and risk_of("recall") == "safe"
+    assert decide("plan", "recall") == "allow"
     print("hearth-permissions self-test OK")
     return 0
 

@@ -15,10 +15,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _bin(name, fallback):
@@ -438,6 +441,25 @@ def tool_nix_check(args, workspace):
     return "nix_check {}\n{}".format("PASS" if r.returncode == 0 else "FAIL", tail)
 
 
+def tool_remember(args, workspace):
+    """Record a lesson into hearth's self-learning memory."""
+    import hearth_memory
+    db = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
+    rid = hearth_memory.remember(db, args.get("insight", ""), kind=args.get("kind", "lesson"),
+                                 tags=args.get("tags", ""), source="tool")
+    return "remembered (id {})".format(rid) if rid else "error: nothing to remember"
+
+
+def tool_recall(args, workspace):
+    """Recall lessons from hearth's memory relevant to a query."""
+    import hearth_memory
+    db = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
+    hits = hearth_memory.recall(db, args.get("query", ""), limit=int(args.get("limit") or 8))
+    if not hits:
+        return "(no relevant lessons yet)"
+    return "\n".join("[{}] {}".format(h["kind"], h["insight"]) for h in hits)
+
+
 TOOLS = [
     {
         "name": "run_command",
@@ -542,6 +564,20 @@ TOOLS = [
         "description": "Validate hearth's flake by running nix flake check locally (no build). Use after editing the config to confirm it still evaluates. Read-only.",
         "parameters": {"type": "object", "properties": {}},
         "fn": tool_nix_check,
+    },
+    {
+        "name": "remember",
+        "description": "Record a lesson into hearth's long-term memory so future runs can recall it. Provide insight (the lesson), optional kind and tags.",
+        "parameters": {"type": "object", "properties": {
+            "insight": {"type": "string"}, "kind": {"type": "string"}, "tags": {"type": "string"}},
+            "required": ["insight"]},
+        "fn": tool_remember,
+    },
+    {
+        "name": "recall",
+        "description": "Recall lessons from hearth's long-term memory relevant to a query.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        "fn": tool_recall,
     },
 ]
 
@@ -648,6 +684,20 @@ def _self_test():
         assert isinstance(nc, str) and nc, nc  # on dev (no nix) it returns an error string, never crashes
     finally:
         globals()["HEARTH_REPO"] = _old_repo
+
+    # memory tools round-trip via the shared store (uses HEARTH_DB env).
+    import tempfile as _tfm2
+    _mdb = os.path.join(_tfm2.mkdtemp(prefix="hearth-memtool-"), "a.db")
+    _oldhdb = os.environ.get("HEARTH_DB")
+    os.environ["HEARTH_DB"] = _mdb
+    try:
+        assert "remembered" in execute_tool("remember", {"insight": "always run nix_check before merging"}, ws)
+        assert "nix_check" in execute_tool("recall", {"query": "nix_check merging"}, ws)
+    finally:
+        if _oldhdb is None:
+            os.environ.pop("HEARTH_DB", None)
+        else:
+            os.environ["HEARTH_DB"] = _oldhdb
 
     print("hearth-tools self-test OK")
     return 0
