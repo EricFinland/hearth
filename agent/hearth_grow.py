@@ -181,6 +181,12 @@ def run_growth(model, db=DEFAULT_DB, agent_id="grow", ollama_url=DEFAULT_OLLAMA,
             child_id = "{}-c{}".format(agent_id, cyc)
             state("TOOL_CALL", "cycle {}: implementing + validating".format(cyc))
             result = evolve_fn(idea, child_id)
+            # Link this evolve child to the daemon so the map/tree shows a
+            # self-improvement crew (run_evolve records it parentless; re-record).
+            try:
+                hearth_state.record_meta(child_id, agent_id, "evolve", idea, db=db)
+            except Exception:  # noqa: BLE001
+                pass
             if result:
                 validated += 1
                 say("cycle {} VALIDATED: {} (branch ready for review)".format(cyc, idea))
@@ -291,6 +297,9 @@ def _self_test():
     # meta + final state landed in the db
     metas = {m["agent_id"]: m for m in hearth_state.read_meta(db)}
     assert metas["grow"]["kind"] == "growth", metas
+    # evolve children are linked to the growth daemon (workshop crew in the map)
+    assert metas["grow-c1"]["parent_id"] == "grow", metas["grow-c1"]
+    assert metas["grow-c1"]["kind"] == "evolve", metas["grow-c1"]
     con = sqlite3.connect(db)
     s = con.execute("SELECT state FROM agent_state WHERE agent_id='grow'").fetchone()
     con.close()

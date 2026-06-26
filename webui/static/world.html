@@ -563,14 +563,19 @@ class Sprite {
     return this.kind === 'manager';
   }
 
+  isGrowth() {
+    return this.kind === 'growth';
+  }
+
   draw() {
     if (this.alpha <= 0) return;
     ctx.save();
     ctx.globalAlpha = this.alpha;
 
     const mgr = this.isManager();
-    const R = mgr ? 14 : 9;
-    const headR = mgr ? 7 : 5;
+    const grow = this.isGrowth();
+    const R = mgr ? 14 : (grow ? 12 : 9);
+    const headR = mgr ? 7 : (grow ? 6 : 5);
 
     const bobAmt = (this.state === 'IDLE' || this.state === 'THINKING' || this.state === 'WAITING_IO') ? 2 : 0;
     const bob = Math.sin(this.bobPhase) * bobAmt;
@@ -595,7 +600,7 @@ class Sprite {
 
     // --- body ---
     const bodyCol = STATE_COLOR[this.state] || PALETTE.cyan;
-    const outline = mgr ? '#fff' : bodyCol;
+    const outline = mgr ? '#fff' : (grow ? PALETTE.amber : bodyCol);
     ctx.fillStyle = PALETTE.panel;
     ctx.strokeStyle = outline;
     ctx.lineWidth = mgr ? 2.5 : 1.5;
@@ -639,6 +644,24 @@ class Sprite {
       ctx.fillStyle = PALETTE.cyan;
       ctx.beginPath(); ctx.arc(bx - 4, headY - headR - 8, 2, 0, Math.PI*2); ctx.fill();
       ctx.beginPath(); ctx.arc(bx + 4, headY - headR - 8, 2, 0, Math.PI*2); ctx.fill();
+    }
+
+    // growth daemon: a spinning gear above the head = "tinkering on hearth itself"
+    if (grow) {
+      const gx = bx, gy = headY - headR - 9, gr = 5;
+      const spin = this.age * (this.state === 'TOOL_CALL' ? 0.14 : 0.04);
+      ctx.strokeStyle = PALETTE.amber;
+      ctx.fillStyle = PALETTE.amber;
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 8; i++) {
+        const a = spin + i * Math.PI / 4;
+        ctx.beginPath();
+        ctx.moveTo(gx + Math.cos(a) * gr, gy + Math.sin(a) * gr);
+        ctx.lineTo(gx + Math.cos(a) * (gr + 2.5), gy + Math.sin(a) * (gr + 2.5));
+        ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(gx, gy, gr, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(gx, gy, 1.6, 0, Math.PI*2); ctx.fill();
     }
 
     // --- state overlays ---
