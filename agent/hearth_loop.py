@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -75,11 +76,49 @@ def chat(base_url, model, messages, tools, timeout=300):
     return data.get("message") or {}, int(data.get("eval_count", 0) or 0)
 
 
+def _balanced_obj(s, start):
+    """Return (substring, end_index) for the brace-balanced {...} starting at
+    s[start], honoring quotes/escapes, or (None, start+1) if it never closes."""
+    depth = 0
+    in_str = False
+    esc = False
+    for j in range(start, len(s)):
+        c = s[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start:j + 1], j + 1
+    return None, start + 1
+
+
+def _lenient_json(text):
+    """json.loads, but tolerate the trailing commas local models often emit
+    (e.g. {"content":"x",}). Returns the object or None."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        try:
+            return json.loads(re.sub(r",(\s*[}\]])", r"\1", text))
+        except ValueError:
+            return None
+
+
 def parse_content_tool_calls(content):
     """Fallback: extract tool calls a model emitted as JSON text instead of using
     Ollama's structured tool_calls field (common with local models). Scans the
     content for JSON objects that name a known tool and returns a list of
-    {name, arguments} dicts."""
+    {name, arguments} dicts. Tolerates trailing-comma JSON."""
     if not content:
         return []
     known = {t["name"] for t in hearth_tools.TOOLS}
@@ -90,18 +129,41 @@ def parse_content_tool_calls(content):
         if content[i] != "{":
             i += 1
             continue
+        obj = None
+        nxt = i + 1
         try:
-            obj, end = decoder.raw_decode(content, i)
+            obj, nxt = decoder.raw_decode(content, i)
         except ValueError:
-            i += 1
-            continue
+            # Strict parse failed (often a trailing comma). Grab the balanced
+            # brace span and retry leniently so the tool call is not lost.
+            sub, span_end = _balanced_obj(content, i)
+            if sub is not None:
+                lenient = _lenient_json(sub)
+                if lenient is not None:
+                    obj, nxt = lenient, span_end
         if isinstance(obj, dict) and obj.get("name") in known:
             args = obj.get("arguments")
             if not isinstance(args, dict):
                 args = obj.get("parameters") if isinstance(obj.get("parameters"), dict) else {}
             calls.append({"name": obj["name"], "arguments": args})
-        i = end
+        i = nxt
     return calls
+
+
+def _result_hint(result):
+    """Append a short, actionable hint when a tool result shows a common,
+    recoverable failure, so a weak local model can self-correct instead of
+    looping on the same mistake. Returns '' when there is nothing to add."""
+    low = (result or "").lower()
+    if "no module named" in low or "modulenotfounderror" in low:
+        return ("\n\n[hint] That Python package is not installed. Use ONLY the "
+                "Python standard library (for images, write a PPM/PGM file by "
+                "hand), or call a tool that is installed.")
+    if "command not found" in low or "not found in path" in low:
+        return ("\n\n[hint] That command is not on PATH. Use an installed tool "
+                "(ffmpeg, imagemagick's `convert`, yt-dlp, sox, git, python3) or a "
+                "different approach.")
+    return ""
 
 
 def _stdout_emit(event):
@@ -228,7 +290,8 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             _emit(agent_name, "TOOL_CALL", name, db)
             result = hearth_tools.execute_tool(name, cargs, workspace)
             emit({"type": "tool_result", "tool": name, "output": result[:MAX_EVENT_OUT]})
-            messages.append({"role": "tool", "content": result[:MAX_EVENT_OUT]})
+            content = result[:MAX_EVENT_OUT] + _result_hint(result)
+            messages.append({"role": "tool", "content": content})
     return final, "hit iteration cap ({})".format(max_iters), tokens_out
 
 
@@ -380,6 +443,20 @@ def _record(db, agent_name, model, tokens_out, latency_ms, error):
 
 def _self_test():
     import tempfile
+    # tolerant tool-call parsing: a trailing comma (as llama3.2 emits) must still
+    # yield the tool call, not be silently dropped.
+    tc = parse_content_tool_calls('{"name":"write_file","parameters":{"path":"a.md","content":"x",}}')
+    assert tc == [{"name": "write_file", "arguments": {"path": "a.md", "content": "x"}}], tc
+    # clean JSON and the structured "arguments" key still work
+    tc2 = parse_content_tool_calls('chatter {"name":"read_file","arguments":{"path":"a"}} more')
+    assert tc2 == [{"name": "read_file", "arguments": {"path": "a"}}], tc2
+    # unbalanced / non-tool braces are ignored without crashing
+    assert parse_content_tool_calls('{"name":"nope"} {oops') == [], "unknown tool + junk"
+    # result hints fire on recoverable failures, stay silent otherwise
+    assert "standard library" in _result_hint("Traceback ... No module named 'PIL'")
+    assert "PATH" in _result_hint("convert: command not found")
+    assert _result_hint("wrote 42 bytes") == ""
+
     ws = tempfile.mkdtemp(prefix="hearth-loop-")
     db = os.path.join(ws, "audit.db")
     steps = [
