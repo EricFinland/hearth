@@ -286,6 +286,37 @@ def read_runs(db, limit=20):
         return []
 
 
+def read_stats_history(db, days=14):
+    """Aggregate the audit log over time: runs/tokens/cost per day, per model, and
+    grand totals. Powers the cockpit stats view."""
+    empty = {"by_day": [], "by_model": [], "totals": {"runs": 0, "tokens": 0, "cost": 0, "errors": 0}}
+    if not os.path.exists(db):
+        return empty
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.executescript(SCHEMA)
+        by_day = con.execute(
+            "SELECT substr(started_at,1,10) d, COUNT(*), "
+            "COALESCE(SUM(tokens_in+tokens_out),0), COALESCE(SUM(cost_usd),0) "
+            "FROM agent_runs GROUP BY d ORDER BY d DESC LIMIT ?", (days,)).fetchall()
+        by_model = con.execute(
+            "SELECT COALESCE(model,'?'), COUNT(*), COALESCE(SUM(tokens_in+tokens_out),0) "
+            "FROM agent_runs GROUP BY model ORDER BY 2 DESC LIMIT 10").fetchall()
+        tot = con.execute(
+            "SELECT COUNT(*), COALESCE(SUM(tokens_in+tokens_out),0), COALESCE(SUM(cost_usd),0), "
+            "COALESCE(SUM(CASE WHEN error IS NOT NULL AND error!='' THEN 1 ELSE 0 END),0) "
+            "FROM agent_runs").fetchone()
+        con.close()
+    except sqlite3.Error:
+        return empty
+    return {
+        "by_day": [{"day": r[0], "runs": r[1], "tokens": r[2], "cost": round(r[3] or 0, 4)}
+                   for r in reversed(by_day)],
+        "by_model": [{"model": r[0], "runs": r[1], "tokens": r[2]} for r in by_model],
+        "totals": {"runs": tot[0], "tokens": tot[1], "cost": round(tot[2] or 0, 4), "errors": tot[3]},
+    }
+
+
 PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_transcript (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -856,6 +887,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"history": read_promote_history()}), "application/json")
         if path == "/schedule":
             return self._send(200, json.dumps({"missions": read_schedule()}), "application/json")
+        if path == "/stats/history":
+            return self._send(200, json.dumps(read_stats_history(self.db)), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])

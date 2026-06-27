@@ -94,6 +94,22 @@
     <div class="title">pending approvals</div>
     <div id="pendBody"></div>
   </div>
+  <div class="card" id="statsHist" style="grid-column:1/3;">
+    <div class="title">usage over time</div>
+    <div id="statsHistBody" style="font-size:12px;">loading...</div>
+  </div>
+  <div class="card" id="sched" style="grid-column:1/3;">
+    <div class="title">standing missions</div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;">
+      <input id="scName" placeholder="name" style="flex:1;min-width:90px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;" />
+      <select id="scKind" style="background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;"><option value="agent">agent</option><option value="marathon">marathon</option><option value="swarm">swarm</option></select>
+      <input id="scEvery" placeholder="every N min" style="width:90px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;" />
+      <input id="scAt" placeholder="or at HH:MM" style="width:90px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;" />
+      <button id="scAdd" style="background:#ffb347;color:#04150c;border:0;border-radius:6px;padding:5px 12px;cursor:pointer;">add</button>
+    </div>
+    <textarea id="scGoal" placeholder="mission goal (what should it do each run?)" style="width:100%;height:42px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;box-sizing:border-box;margin-bottom:6px;"></textarea>
+    <div id="schedBody" style="font-size:12px;"></div>
+  </div>
 </div>
 <script>
 const STATE_ICONS={SPAWNING:"*",IDLE:"z",THINKING:"?",TOOL_CALL:"+",WAITING_IO:"~",WAITING_APPROVAL:"!?",ERRORED:"!",DONE:"#"};
@@ -331,4 +347,57 @@ document.getElementById("agGrow").onclick=async()=>{
     if(j.queued)msg.textContent="growth loop running: "+j.queued+" (validated branches will appear for review)";
     else msg.textContent="error: "+(j.error||"unknown");
   }catch(e){msg.textContent="error: "+e;}};
+
+// ---- usage over time ----
+async function refreshStatsHist(){
+  try{
+    const s=await(await fetch("/stats/history")).json();
+    const t=s.totals||{};
+    const days=s.by_day||[];
+    const maxTok=Math.max(1,...days.map(d=>d.tokens));
+    const bars=days.map(d=>{
+      const h=Math.round(4+(d.tokens/maxTok)*44);
+      return `<div style="display:inline-block;width:24px;text-align:center;vertical-align:bottom;">
+        <div title="${esc(d.day)}: ${d.runs} runs, ${d.tokens} tokens" style="height:${h}px;background:#5fd0ff;border-radius:2px 2px 0 0;margin:0 1px;"></div>
+        <small style="color:#8a93a0;font-size:8px;">${esc(d.day.slice(5))}</small></div>`;}).join("");
+    const models=(s.by_model||[]).map(m=>`<div style="color:#9fb6cc;">${esc(m.model)}: ${m.runs} runs, ${m.tokens} tok</div>`).join("");
+    document.getElementById("statsHistBody").innerHTML=
+      `<div style="color:#cfe6ff;margin-bottom:6px;">${t.runs||0} runs total &middot; ${(t.tokens||0).toLocaleString()} tokens &middot; ${t.errors||0} errored</div>
+       <div style="display:flex;align-items:flex-end;gap:0;min-height:54px;overflow-x:auto;">${bars||"<small style='color:#8a93a0'>no runs yet</small>"}</div>
+       <div style="margin-top:8px;font-size:11px;">${models}</div>`;
+  }catch(e){}
+}
+setInterval(refreshStatsHist,5000); refreshStatsHist();
+
+// ---- standing missions (scheduler) ----
+async function refreshSched(){
+  try{
+    const s=await(await fetch("/schedule")).json();
+    const ms=s.missions||[];
+    document.getElementById("schedBody").innerHTML=ms.length?ms.map(m=>{
+      const sc=m.schedule||{};
+      const when=sc.every_minutes?("every "+sc.every_minutes+"m"):(sc.at?("daily "+sc.at):"?");
+      return `<div style="display:flex;align-items:center;gap:8px;border-left:3px solid ${m.enabled?"#6fcf7f":"#5a2a2a"};padding:3px 8px;margin:3px 0;">
+        <b style="color:#cfe6ff">${esc(m.name||m.id)}</b>
+        <small style="color:#8a93a0">${esc(m.kind||"agent")} &middot; ${esc(when)}${m.last_run?(" &middot; last "+esc(m.last_run.slice(5,16))):""}</small>
+        <span style="margin-left:auto;"></span>
+        <button data-id="${esc(m.id)}" class="scTgl" style="background:none;border:1px solid #16324f;color:#9fb6cc;border-radius:5px;font-size:10px;cursor:pointer;padding:2px 7px;">${m.enabled?"pause":"resume"}</button>
+        <button data-id="${esc(m.id)}" class="scDel" style="background:none;border:1px solid #5a2a2a;color:#e06a6a;border-radius:5px;font-size:10px;cursor:pointer;padding:2px 7px;">delete</button>
+      </div>`;}).join(""):"<small style='color:#8a93a0'>no standing missions. add one above.</small>";
+    document.querySelectorAll(".scTgl").forEach(b=>b.onclick=async()=>{await fetch("/schedule/"+b.dataset.id+"/toggle",{method:"POST"});refreshSched();});
+    document.querySelectorAll(".scDel").forEach(b=>b.onclick=async()=>{await fetch("/schedule/"+b.dataset.id+"/delete",{method:"POST"});refreshSched();});
+  }catch(e){}
+}
+document.getElementById("scAdd").onclick=async()=>{
+  const body={name:document.getElementById("scName").value.trim(),goal:document.getElementById("scGoal").value.trim(),
+    kind:document.getElementById("scKind").value,model:document.getElementById("agModel").value};
+  const ev=document.getElementById("scEvery").value.trim(), at=document.getElementById("scAt").value.trim();
+  if(ev)body.every_minutes=ev; else if(at)body.at=at;
+  if(!body.goal||(!ev&&!at)){alert("need a goal and a schedule (every N min, or at HH:MM)");return;}
+  const r=await fetch("/schedule",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(j.id){document.getElementById("scGoal").value="";document.getElementById("scName").value="";document.getElementById("scEvery").value="";document.getElementById("scAt").value="";refreshSched();}
+  else alert("error: "+(j.error||"failed"));
+};
+setInterval(refreshSched,5000); refreshSched();
 </script></body></html>
