@@ -317,6 +317,40 @@ def read_stats_history(db, days=14):
     }
 
 
+def _prom_label(v):
+    return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def prometheus_metrics(db, units=("hearth-grow.service", "hearth-mapd.service",
+                                  "hearth-schedule.timer"), is_active_fn=None):
+    """Render hearth's stats in Prometheus exposition format so any standard
+    scraper (Grafana, etc.) can graph runs, tokens, errors, and daemon health."""
+    h = read_stats_history(db)
+    t = h["totals"]
+    if is_active_fn is None:
+        def is_active_fn(u):
+            try:
+                r = subprocess.run([SYSTEMCTL, "is-active", u], capture_output=True, text=True, timeout=6)
+                return (r.stdout or "").strip() == "active"
+            except (OSError, subprocess.SubprocessError):
+                return False
+    L = []
+    L += ["# HELP hearth_runs_total Total agent runs recorded.",
+          "# TYPE hearth_runs_total counter", "hearth_runs_total {}".format(t["runs"])]
+    L += ["# HELP hearth_tokens_total Total tokens across all runs.",
+          "# TYPE hearth_tokens_total counter", "hearth_tokens_total {}".format(t["tokens"])]
+    L += ["# HELP hearth_errors_total Total runs that ended in error.",
+          "# TYPE hearth_errors_total counter", "hearth_errors_total {}".format(t["errors"])]
+    L += ["# HELP hearth_runs_by_model Runs per model.", "# TYPE hearth_runs_by_model counter"]
+    for m in h["by_model"]:
+        L.append('hearth_runs_by_model{{model="{}"}} {}'.format(_prom_label(m["model"]), m["runs"]))
+    L += ["# HELP hearth_daemon_up 1 if the unit is active, else 0.",
+          "# TYPE hearth_daemon_up gauge"]
+    for u in units:
+        L.append('hearth_daemon_up{{unit="{}"}} {}'.format(_prom_label(u), 1 if is_active_fn(u) else 0))
+    return "\n".join(L) + "\n"
+
+
 PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_transcript (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -908,6 +942,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"missions": read_schedule()}), "application/json")
         if path == "/stats/history":
             return self._send(200, json.dumps(read_stats_history(self.db)), "application/json")
+        if path == "/metrics":
+            return self._send(200, prometheus_metrics(self.db), "text/plain; version=0.0.4; charset=utf-8")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
@@ -1295,6 +1331,12 @@ def _self_test():
     assert err2, "missing goal/schedule rejected"
     assert schedule_toggle(mid, path=sreg) and read_schedule(sreg)[0]["enabled"] is False
     assert schedule_remove(mid, path=sreg) and read_schedule(sreg) == []
+
+    # Prometheus metrics: counters + per-model + daemon gauges (daemon injected).
+    mtxt = prometheus_metrics(tdb, units=("hearth-grow.service",), is_active_fn=lambda u: True)
+    assert "hearth_runs_total" in mtxt and "# TYPE hearth_runs_total counter" in mtxt, mtxt
+    assert 'hearth_daemon_up{unit="hearth-grow.service"} 1' in mtxt, mtxt
+    assert "hearth_errors_total" in mtxt and "hearth_tokens_total" in mtxt, mtxt
 
     print("hearth-mapd self-test OK")
     return 0
