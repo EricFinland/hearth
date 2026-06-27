@@ -562,6 +562,40 @@ def tool_recall(args, workspace):
     return "\n".join("[{}] {}".format(h["kind"], h["insight"]) for h in hits)
 
 
+def _kb_db():
+    return os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
+
+
+def tool_kb_add(args, workspace):
+    """Add a document to the local knowledge base. Provide source plus either text
+    or a workspace path to read from."""
+    import hearth_knowledge
+    source = (args.get("source") or "").strip()
+    if not source:
+        return "error: a 'source' name is required"
+    text = args.get("text")
+    if not text and args.get("path"):
+        try:
+            with open(_safe_join(workspace, args.get("path")), errors="replace") as fh:
+                text = fh.read()
+        except (OSError, ValueError) as exc:
+            return "error: {}".format(exc)
+    if not (text or "").strip():
+        return "error: nothing to ingest (give 'text' or a readable 'path')"
+    n = hearth_knowledge.ingest(_kb_db(), source, text)
+    return "added '{}' to the knowledge base ({} chunk{})".format(source, n, "s" if n != 1 else "")
+
+
+def tool_kb_search(args, workspace):
+    """Search the local knowledge base for chunks relevant to a query."""
+    import hearth_knowledge
+    hits = hearth_knowledge.search(_kb_db(), args.get("query", ""), limit=int(args.get("limit") or 5))
+    if not hits:
+        return "(no relevant knowledge found)"
+    return "\n\n".join("[{} #{}] (score {})\n{}".format(h["source"], h["chunk"], h["score"], h["text"])
+                       for h in hits)
+
+
 TOOLS = [
     {
         "name": "run_command",
@@ -705,6 +739,22 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
         "fn": tool_recall,
     },
+    {
+        "name": "kb_add",
+        "description": "Add a document to the local knowledge base for later retrieval. Provide a source name and either text or a workspace path to read.",
+        "parameters": {"type": "object", "properties": {
+            "source": {"type": "string"}, "text": {"type": "string"}, "path": {"type": "string"}},
+            "required": ["source"]},
+        "fn": tool_kb_add,
+    },
+    {
+        "name": "kb_search",
+        "description": "Search the local knowledge base for the chunks most relevant to a query, to ground an answer in ingested documents.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "limit": {"type": "integer"}},
+            "required": ["query"]},
+        "fn": tool_kb_search,
+    },
 ]
 
 _BY_NAME = {t["name"]: t for t in TOOLS}
@@ -749,6 +799,23 @@ def _self_test():
     assert "x = 42" in execute_tool("read_file", {"path": "src/app.py"}, ws)
     miss = execute_tool("edit_file", {"path": "src/app.py", "find": "not there", "replace": "y"}, ws)
     assert "not found" in miss, ("edit_file errors cleanly when find absent", miss)
+    # knowledge base: add docs (inline + from a workspace file), then search.
+    import tempfile as _tf2
+    kbdb = os.path.join(_tf2.mkdtemp(prefix="hearth-kbtool-"), "a.db")
+    old_db = os.environ.get("HEARTH_DB")
+    os.environ["HEARTH_DB"] = kbdb
+    try:
+        assert "added" in execute_tool("kb_add", {"source": "nix", "text": "NixOS rolls back atomically from a flake."}, ws)
+        execute_tool("write_file", {"path": "notes.txt", "content": "Ollama serves local models on the GPU."}, ws)
+        assert "added" in execute_tool("kb_add", {"source": "notes", "path": "notes.txt"}, ws)
+        found = execute_tool("kb_search", {"query": "rollback flake"}, ws)
+        assert "nix" in found and "atomically" in found, found
+        assert "no relevant" in execute_tool("kb_search", {"query": "zzz_nothing_qqq"}, ws)
+    finally:
+        if old_db is None:
+            os.environ.pop("HEARTH_DB", None)
+        else:
+            os.environ["HEARTH_DB"] = old_db
     # web_fetch: the HTML-to-text helper strips tags and collapses whitespace.
     sample = "<html><head><style>x{}</style><script>var a=1;</script></head>" \
              "<body><h1>Title</h1><p>Hello   world</p><p>Line two</p></body></html>"
