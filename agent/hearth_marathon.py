@@ -12,6 +12,7 @@ Standard library only.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -43,6 +44,44 @@ def _chat(ollama_url, model, messages, timeout=300):
         return (json.loads(resp.read().decode()).get("message") or {}).get("content", "")
 
 
+# Output/artifact file extensions: when a goal names a file like these, it is a
+# deliverable we can deterministically verify exists before believing "DONE".
+# Source-ish extensions (.py/.nix/.sh) are intentionally excluded — they are
+# often inputs the agent only reads, so requiring them would cause false vetoes.
+_ARTIFACT_EXT = ("png", "ppm", "pgm", "jpg", "jpeg", "gif", "svg", "webp", "mp4",
+                 "mov", "mkv", "webm", "mp3", "wav", "flac", "md", "txt", "csv",
+                 "tsv", "html", "pdf", "json", "yaml", "yml")
+_ARTIFACT_RE = re.compile(r"[\w./-]+\.(?:" + "|".join(_ARTIFACT_EXT) + r")\b", re.I)
+
+
+def required_artifacts(goal):
+    """Artifact filenames the goal names as deliverables (de-duped)."""
+    out = []
+    for m in _ARTIFACT_RE.finditer(goal or ""):
+        name = m.group(0)
+        if name not in out:
+            out.append(name)
+    return out
+
+
+def missing_artifacts(goal, workspace, size_fn=None):
+    """Of the deliverables named in the goal, those missing or empty in the
+    workspace. Empty list means every named artifact exists and is non-empty."""
+    def _size(p):
+        try:
+            return os.path.getsize(p)
+        except OSError:
+            return -1
+    size_fn = size_fn or _size
+    missing = []
+    for name in required_artifacts(goal):
+        base = os.path.basename(name)
+        cands = [os.path.join(workspace, name), os.path.join(workspace, base)]
+        if not any(size_fn(c) > 0 for c in cands):
+            missing.append(base)
+    return missing
+
+
 def judge(goal, worklog, model, ollama_url, judge_fn=None):
     """Return (done_bool, next_step_str)."""
     judge_fn = judge_fn or (lambda msgs: _chat(ollama_url, model, msgs))
@@ -63,7 +102,8 @@ def _resolve_telegram():
 def run_marathon(goal, model, workspace, db=DEFAULT_DB, agent_id="marathon", mode="bypass",
                  ollama_url=DEFAULT_OLLAMA, max_rounds=MAX_ROUNDS, checkin=False,
                  tg_token=None, tg_chat=None, turn_chat_fn=None, judge_fn=None,
-                 emit_fn=None, tg_send=None, tg_wait=None, round_sleep=0.0):
+                 emit_fn=None, tg_send=None, tg_wait=None, round_sleep=0.0,
+                 verify_artifacts=True, artifact_size_fn=None):
     """Work in rounds until the goal is judged DONE, the user says stop, or
     max_rounds. Returns the final text (or None on error)."""
     if tg_token is None or tg_chat is None:
@@ -110,6 +150,17 @@ def run_marathon(goal, model, workspace, db=DEFAULT_DB, agent_id="marathon", mod
             final = f or final
             worklog = "\n".join(m.get("content", "") for m in messages[-6:] if m.get("content"))[:2500]
             done, nxt = judge(goal, worklog, model, ollama_url, judge_fn)
+            # Don't take the model's word for it: if the goal names deliverable
+            # files that are missing or empty, the goal is NOT done. Veto and tell
+            # the model exactly what to produce. (Fixes credulous "done" claims.)
+            if done and verify_artifacts:
+                miss = missing_artifacts(goal, workspace, artifact_size_fn)
+                if miss:
+                    done = False
+                    nxt = ("not done yet: the goal requires these file(s) which are "
+                           "missing or empty: " + ", ".join(miss) + ". Produce them, then finish.")
+                    emit_fn({"type": "message", "role": "marathon",
+                             "content": "round {} completion vetoed: missing {}".format(rounds, ", ".join(miss))})
             dm("round {}: {}".format(rounds, "COMPLETE" if done else ("next: " + nxt)[:300]))
             emit_fn({"type": "message", "role": "marathon",
                      "content": "round {} {}".format(rounds, "complete" if done else "-> " + nxt)})
@@ -195,6 +246,41 @@ def _self_test():
     s = con.execute("SELECT state, detail FROM agent_state WHERE agent_id='mar2'").fetchone()
     con.close()
     assert s and s[0] == "DONE" and "Telegram" in (s[1] or ""), ("stop path", s)
+
+    # artifact extraction + missing-detection (pure)
+    assert required_artifacts("save it to mandel.png and a self_portrait.md please") == \
+        ["mandel.png", "self_portrait.md"], required_artifacts("save it to mandel.png and a self_portrait.md")
+    assert required_artifacts("read config.py and run it") == [], "source files are not deliverables"
+    dd = tempfile.mkdtemp(prefix="marathon-art-")
+    assert missing_artifacts("make out.png", dd) == ["out.png"], "missing file detected"
+    with open(os.path.join(dd, "out.png"), "wb") as fh:
+        fh.write(b"x" * 50)
+    assert missing_artifacts("make out.png", dd) == [], "present non-empty file accepted"
+
+    # completion veto: judge always says DONE, but the marathon refuses to finish
+    # until the named deliverable actually exists. The turn writes it on round 2.
+    d3 = tempfile.mkdtemp(prefix="marathon-veto-")
+    db3 = os.path.join(d3, "a.db")
+    hearth_state.ensure_schema(db3)
+    sqlite3.connect(db3).executescript(hearth_loop.TRANSCRIPT_SCHEMA)
+    turns = []
+
+    def turn_make(msgs):
+        turns.append(1)
+        if len(turns) >= 2:  # produce the deliverable on the second round
+            with open(os.path.join(d3, "report.md"), "w") as fh:
+                fh.write("the report body")
+        return {"role": "assistant", "content": "working"}, 1
+
+    run_marathon("write the briefing to report.md", "mock", d3, db=db3, agent_id="mv",
+                 mode="bypass", max_rounds=8, checkin=False, tg_token="", tg_chat="",
+                 turn_chat_fn=turn_make, judge_fn=lambda msgs: "DONE",
+                 tg_send=lambda *a: True)
+    assert len(turns) == 2, ("vetoed round 1 (no file), accepted round 2 once written", turns)
+    con = sqlite3.connect(db3)
+    s3 = con.execute("SELECT state FROM agent_state WHERE agent_id='mv'").fetchone()
+    con.close()
+    assert s3 and s3[0] == "DONE", s3
 
     print("hearth-marathon self-test OK")
     return 0
