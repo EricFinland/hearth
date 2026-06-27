@@ -21,9 +21,14 @@ hearth-loop --self-test
 
 Each iteration: the model is given the goal, the available tools, and the results
 so far. It either calls a tool or replies with a final summary. The loop caps at
-12 iterations so a confused model cannot run forever. Local models sometimes emit
-tool calls as JSON inside their text rather than in the structured field, so the
-loop parses tool calls from the message content too.
+12 iterations so a confused model cannot run forever.
+
+The loop is built to tolerate the quirks of small local models. It parses tool
+calls out of the message content (not just the structured field) and recovers
+from common malformations like a trailing comma, so a slightly-off tool call is
+not lost. When a tool result shows a recoverable failure (a missing package, a
+command not on `PATH`), the loop appends a short, actionable hint so a weak model
+can self-correct on the next turn instead of looping on the same mistake.
 
 Every step emits runtime state (so the [map](/hearth/operations/map-dashboard/)
 can show the agent thinking) and the whole run is recorded to the audit database
@@ -77,6 +82,11 @@ instance (`hearth-agent@<id>`). That instance reads the request, runs
 `hearth-loop` in a fresh workspace at `/var/lib/hearth/agents/<id>`, and removes
 the request file. The queue directory is the only extra path the instance can
 write, so a launch cannot reach anything else.
+
+The launch path is self-healing: if the queue watcher ever falls into a failed
+state (which would otherwise silently swallow launches), enqueuing a run clears
+that state, processes the queue immediately, and re-arms the watcher for next
+time, so a launch never gets dropped without a trace.
 
 ```
 command center  ->  /var/lib/hearth/queue/<id>.json

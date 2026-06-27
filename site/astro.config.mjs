@@ -97,6 +97,8 @@ export default defineConfig({
           label: 'Project',
           items: [
             { label: 'About', link: '/project/about/' },
+            { label: 'Security model', link: '/project/security/' },
+            { label: 'Contributing', link: '/project/contributing/' },
             { label: 'Roadmap', link: '/project/roadmap/' },
             { label: 'Decision records', link: '/project/decisions/' },
             { label: 'Project status', link: '/project/status/' },

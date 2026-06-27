@@ -51,6 +51,12 @@ With `--checkin`, marathon pauses each round and waits for a
 [Telegram](/hearth/reference/telegram/) reply so you can steer it from your phone:
 reply to redirect it, or send "stop" to end it.
 
+It also does not take the model's word for "done." If the goal names deliverable
+files, marathon checks that those files actually exist and are non-empty before it
+accepts a `DONE`. If any are missing it vetoes the completion and tells the model
+exactly which files to produce, which stops a weaker local model from declaring
+victory without the artifacts.
+
 ## Self-evolve
 
 This is hearth editing its own configuration, safely.

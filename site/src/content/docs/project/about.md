@@ -40,6 +40,8 @@ file in the repository for the full text.
 ## Contributing and contact
 
 Issues and pull requests are welcome on
-[the GitHub repository](https://github.com/EricFinland/hearth). If you are
-evaluating hearth for your own homelab or want to discuss the design, the repo is
-the best place to start a conversation.
+[the GitHub repository](https://github.com/EricFinland/hearth). See
+[Contributing](/hearth/project/contributing/) for the ground rules and the checks
+to run, and the [Security model](/hearth/project/security/) for how to report
+anything security-sensitive. If you are evaluating hearth for your own homelab or
+want to discuss the design, the repo is the best place to start a conversation.
