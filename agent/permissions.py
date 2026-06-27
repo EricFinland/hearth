@@ -44,6 +44,8 @@ RISK = {
     "recall": "safe",
     "kb_search": "safe",
     "kb_add": "edit",
+    "replace_in_files": "edit",
+    "fetch_to_kb": "dangerous",
 }
 
 
@@ -124,6 +126,8 @@ def _self_test():
     assert decide("auto", "edit_file") == "allow"
     assert risk_of("kb_search") == "safe" and risk_of("kb_add") == "edit"
     assert decide("plan", "kb_search") == "allow" and decide("plan", "kb_add") == "deny"
+    assert risk_of("replace_in_files") == "edit" and risk_of("fetch_to_kb") == "dangerous"
+    assert decide("auto", "replace_in_files") == "allow" and decide("auto", "fetch_to_kb") == "gate"
     assert decide("plan", "recall") == "allow"
     print("hearth-permissions self-test OK")
     return 0

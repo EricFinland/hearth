@@ -586,6 +586,59 @@ def tool_kb_add(args, workspace):
     return "added '{}' to the knowledge base ({} chunk{})".format(source, n, "s" if n != 1 else "")
 
 
+def tool_replace_in_files(args, workspace):
+    """Find/replace exact text across every matching file under a path (a
+    multi-file refactor). Optional glob filters filenames. Returns a summary."""
+    find = args.get("find")
+    if not find:
+        return "error: no 'find' text given"
+    replace = args.get("replace", "")
+    pattern = args.get("glob")
+    try:
+        base = _safe_join(workspace, args.get("path", "."))
+    except ValueError as exc:
+        return "error: {}".format(exc)
+    files_changed = 0
+    total = 0
+    for dirpath, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _TREE_SKIP]
+        for fn in sorted(files):
+            if pattern and not fnmatch.fnmatch(fn, pattern):
+                continue
+            fp = os.path.join(dirpath, fn)
+            try:
+                if os.path.getsize(fp) > 2_000_000:
+                    continue
+                with open(fp, "r", errors="replace") as fh:
+                    content = fh.read()
+            except OSError:
+                continue
+            c = content.count(find)
+            if c:
+                with open(fp, "w") as fh:
+                    fh.write(content.replace(find, replace))
+                files_changed += 1
+                total += c
+    if not files_changed:
+        return "no occurrences of that text found (no changes)"
+    return "replaced {} occurrence(s) across {} file(s)".format(total, files_changed)
+
+
+def tool_fetch_to_kb(args, workspace):
+    """Fetch a web page's readable text and ingest it into the knowledge base in
+    one step. Provide url (and optional source name)."""
+    import hearth_knowledge
+    url = args.get("url")
+    if not url:
+        return "error: no url"
+    text = tool_web_fetch({"url": url}, workspace)
+    if text.startswith("error:") or text == "(no readable text)":
+        return "could not fetch: {}".format(text)
+    source = args.get("source") or url
+    n = hearth_knowledge.ingest(_kb_db(), source, text, embed_fn=hearth_knowledge.make_embedder())
+    return "fetched and added '{}' to the knowledge base ({} chunk{})".format(source, n, "s" if n != 1 else "")
+
+
 def tool_kb_search(args, workspace):
     """Search the local knowledge base for chunks relevant to a query."""
     import hearth_knowledge
@@ -756,6 +809,23 @@ TOOLS = [
             "required": ["query"]},
         "fn": tool_kb_search,
     },
+    {
+        "name": "replace_in_files",
+        "description": "Find/replace exact text across all matching files under a path (a multi-file refactor). Optional glob filters filenames (e.g. *.py).",
+        "parameters": {"type": "object", "properties": {
+            "find": {"type": "string"}, "replace": {"type": "string"},
+            "path": {"type": "string"}, "glob": {"type": "string"}},
+            "required": ["find"]},
+        "fn": tool_replace_in_files,
+    },
+    {
+        "name": "fetch_to_kb",
+        "description": "Fetch a web page and add its readable text to the knowledge base in one step. Provide url (and optional source name).",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string"}, "source": {"type": "string"}},
+            "required": ["url"]},
+        "fn": tool_fetch_to_kb,
+    },
 ]
 
 _BY_NAME = {t["name"]: t for t in TOOLS}
@@ -814,6 +884,13 @@ def _self_test():
         found = execute_tool("kb_search", {"query": "rollback flake"}, ws)
         assert "nix" in found and "atomically" in found, found
         assert "no relevant" in execute_tool("kb_search", {"query": "zzz_nothing_qqq"}, ws)
+        # replace_in_files: multi-file find/replace
+        execute_tool("write_file", {"path": "r/a.py", "content": "VER = 1\n"}, ws)
+        execute_tool("write_file", {"path": "r/b.py", "content": "x = VER\nVER = 2\n"}, ws)
+        rep = execute_tool("replace_in_files", {"find": "VER", "replace": "VERSION", "path": "r", "glob": "*.py"}, ws)
+        assert "3 occurrence" in rep and "2 file" in rep, rep
+        assert "VERSION = 1" in execute_tool("read_file", {"path": "r/a.py"}, ws)
+        assert execute_tool("replace_in_files", {"find": "nope_zzz"}, ws) == "no occurrences of that text found (no changes)"
     finally:
         if old_db is None:
             os.environ.pop("HEARTH_DB", None)
