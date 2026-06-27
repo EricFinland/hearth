@@ -11,15 +11,21 @@ Standard library only.
 """
 
 import argparse
+import json
 import math
 import os
 import re
 import sqlite3
 import sys
+import urllib.request
 from collections import Counter
 from datetime import datetime, timezone
 
 DEFAULT_DB = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
+DEFAULT_OLLAMA = os.environ.get("HEARTH_OLLAMA", "http://127.0.0.1:11434")
+# When set (and the model is pulled), retrieval uses semantic embeddings; when
+# absent or unavailable it falls back to lexical TF-IDF. Both are local.
+EMBED_MODEL = os.environ.get("HEARTH_EMBED_MODEL", "nomic-embed-text")
 CHUNK_CHARS = 800
 
 SCHEMA = """
@@ -28,7 +34,8 @@ CREATE TABLE IF NOT EXISTS kb_chunks (
   source    TEXT NOT NULL,
   chunk_idx INTEGER NOT NULL,
   text      TEXT NOT NULL,
-  ts        TEXT NOT NULL
+  ts        TEXT NOT NULL,
+  embedding TEXT
 );
 """
 
@@ -45,7 +52,46 @@ def _con(db):
         os.makedirs(parent, exist_ok=True)
     con = sqlite3.connect(db, timeout=10)
     con.executescript(SCHEMA)
+    # Migrate older databases that predate the embedding column.
+    cols = [r[1] for r in con.execute("PRAGMA table_info(kb_chunks)")]
+    if "embedding" not in cols:
+        con.execute("ALTER TABLE kb_chunks ADD COLUMN embedding TEXT")
+        con.commit()
     return con
+
+
+def ollama_embed(text, model=EMBED_MODEL, url=DEFAULT_OLLAMA, timeout=60):
+    """Get an embedding vector for text from Ollama. Returns a list of floats, or
+    None on any failure (so callers fall back to lexical search)."""
+    try:
+        body = json.dumps({"model": model, "prompt": text}).encode()
+        req = urllib.request.Request(url.rstrip("/") + "/api/embeddings", data=body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            vec = json.loads(resp.read().decode()).get("embedding")
+        return vec if vec else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def make_embedder(model=None, url=None):
+    """Return an embed function (text -> vector) bound to a model, or None when no
+    model is configured (which keeps retrieval on lexical TF-IDF). The model is
+    read from HEARTH_EMBED_MODEL at call time (set it to "" to force TF-IDF)."""
+    if model is None:
+        model = os.environ.get("HEARTH_EMBED_MODEL", "nomic-embed-text")
+    if not model:
+        return None
+    return lambda text: ollama_embed(text, model=model, url=url or DEFAULT_OLLAMA)
+
+
+def _cosine(a, b):
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
 
 
 def _tokens(text):
@@ -79,16 +125,28 @@ def chunk_text(text, size=CHUNK_CHARS):
     return chunks
 
 
-def ingest(db, source, text, size=CHUNK_CHARS):
+def ingest(db, source, text, size=CHUNK_CHARS, embed_fn=None):
     """Add (or replace) a document under `source`. Re-ingesting the same source
-    replaces its chunks. Returns the number of chunks stored."""
+    replaces its chunks. If embed_fn is given, each chunk's embedding is computed
+    and cached so search can rank semantically. Returns the number of chunks."""
     chunks = chunk_text(text, size)
+    rows = []
+    for i, c in enumerate(chunks):
+        emb = None
+        if embed_fn:
+            try:
+                v = embed_fn(c)
+                if v:
+                    emb = json.dumps(v)
+            except Exception:  # noqa: BLE001
+                emb = None
+        rows.append((source, i, c, _now(), emb))
     con = _con(db)
     try:
         con.execute("DELETE FROM kb_chunks WHERE source=?", (source,))
         con.executemany(
-            "INSERT INTO kb_chunks (source, chunk_idx, text, ts) VALUES (?,?,?,?)",
-            [(source, i, c, _now()) for i, c in enumerate(chunks)])
+            "INSERT INTO kb_chunks (source, chunk_idx, text, ts, embedding) VALUES (?,?,?,?,?)",
+            rows)
         con.commit()
     finally:
         con.close()
@@ -157,18 +215,41 @@ def _tfidf_rank(query, docs):
     return out
 
 
-def search(db, query, limit=5, rank_fn=None):
-    """Return up to `limit` chunks most relevant to `query`, highest score first."""
+def search(db, query, limit=5, rank_fn=None, embed_fn=None):
+    """Return up to `limit` chunks most relevant to `query`, highest score first.
+    If embed_fn is given and chunks have cached embeddings, ranks semantically by
+    cosine similarity; otherwise falls back to lexical TF-IDF."""
     if not os.path.exists(db) or not (query or "").strip():
         return []
     con = _con(db)
     try:
-        rows = con.execute("SELECT source, chunk_idx, text FROM kb_chunks").fetchall()
+        rows = con.execute("SELECT source, chunk_idx, text, embedding FROM kb_chunks").fetchall()
     finally:
         con.close()
-    docs = [{"source": r[0], "chunk": r[1], "text": r[2]} for r in rows]
+    docs = [{"source": r[0], "chunk": r[1], "text": r[2], "embedding": r[3]} for r in rows]
     if not docs:
         return []
+    if embed_fn:
+        qv = None
+        try:
+            qv = embed_fn(query)
+        except Exception:  # noqa: BLE001
+            qv = None
+        if qv:
+            scored = []
+            for d in docs:
+                if d["embedding"]:
+                    try:
+                        dv = json.loads(d["embedding"])
+                    except ValueError:
+                        continue
+                    s = _cosine(qv, dv)
+                    if s > 0:
+                        scored.append((s, d))
+            if scored:  # only use semantic if at least one chunk had an embedding
+                scored.sort(key=lambda x: -x[0])
+                return [{"source": d["source"], "chunk": d["chunk"], "score": round(s, 4),
+                         "text": d["text"]} for s, d in scored[:limit]]
     ranked = (rank_fn or _tfidf_rank)(query, docs)
     return [{"source": d["source"], "chunk": d["chunk"], "score": round(s, 4), "text": d["text"]}
             for s, d in ranked[:limit]]
@@ -220,6 +301,25 @@ def _self_test():
     assert forget(db, "cats.md") >= 1 and not any(s["source"] == "cats.md" for s in sources(db))
     ctx = as_context(search(db, "ollama"))
     assert "Relevant knowledge" in ctx and "ollama.md" in ctx, ctx
+
+    # semantic search with an injected embedder (3-dim keyword vectors).
+    assert make_embedder("") is None, "no model -> no embedder"
+    assert _cosine([1, 0], [1, 0]) == 1.0 and _cosine([1, 0], [0, 1]) == 0.0
+
+    def fake_embed(t):
+        t = t.lower()
+        return [float(t.count("nix")), float(t.count("gpu")), float(t.count("cat"))]
+    edb = os.path.join(tempfile.mkdtemp(prefix="hearth-kb-emb-"), "e.db")
+    ingest(edb, "nix", "nix nix flake rollback", embed_fn=fake_embed)
+    ingest(edb, "gpu", "gpu cuda ollama models", embed_fn=fake_embed)
+    ingest(edb, "cat", "cat cat nap furry", embed_fn=fake_embed)
+    assert search(edb, "nix flake", limit=1, embed_fn=fake_embed)[0]["source"] == "nix"
+    assert search(edb, "gpu cuda", limit=1, embed_fn=fake_embed)[0]["source"] == "gpu"
+    # without an embedder it still works via TF-IDF on the same db
+    assert search(edb, "rollback flake", limit=1)[0]["source"] == "nix"
+    # a chunk ingested without an embedding -> semantic path falls back to TF-IDF
+    ingest(edb, "plain", "reproducible deterministic builds")
+    assert search(edb, "reproducible deterministic", limit=1, embed_fn=fake_embed)[0]["source"] == "plain"
 
     print("hearth-knowledge self-test OK")
     return 0

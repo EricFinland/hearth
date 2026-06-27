@@ -13,7 +13,7 @@ in
 
     models = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ "llama3.2:3b" "mistral:7b" ];
+      default = [ "llama3.2:3b" "mistral:7b" "qwen2.5-coder" "nomic-embed-text" ];
       description = ''
         Models to pull on activation. Each string is passed verbatim to
         `ollama pull`. The hearth-model-pull oneshot service iterates this list.

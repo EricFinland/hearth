@@ -582,14 +582,15 @@ def tool_kb_add(args, workspace):
             return "error: {}".format(exc)
     if not (text or "").strip():
         return "error: nothing to ingest (give 'text' or a readable 'path')"
-    n = hearth_knowledge.ingest(_kb_db(), source, text)
+    n = hearth_knowledge.ingest(_kb_db(), source, text, embed_fn=hearth_knowledge.make_embedder())
     return "added '{}' to the knowledge base ({} chunk{})".format(source, n, "s" if n != 1 else "")
 
 
 def tool_kb_search(args, workspace):
     """Search the local knowledge base for chunks relevant to a query."""
     import hearth_knowledge
-    hits = hearth_knowledge.search(_kb_db(), args.get("query", ""), limit=int(args.get("limit") or 5))
+    hits = hearth_knowledge.search(_kb_db(), args.get("query", ""), limit=int(args.get("limit") or 5),
+                                   embed_fn=hearth_knowledge.make_embedder())
     if not hits:
         return "(no relevant knowledge found)"
     return "\n\n".join("[{} #{}] (score {})\n{}".format(h["source"], h["chunk"], h["score"], h["text"])
@@ -803,7 +804,9 @@ def _self_test():
     import tempfile as _tf2
     kbdb = os.path.join(_tf2.mkdtemp(prefix="hearth-kbtool-"), "a.db")
     old_db = os.environ.get("HEARTH_DB")
+    old_embed = os.environ.get("HEARTH_EMBED_MODEL")
     os.environ["HEARTH_DB"] = kbdb
+    os.environ["HEARTH_EMBED_MODEL"] = ""  # force deterministic offline TF-IDF in the test
     try:
         assert "added" in execute_tool("kb_add", {"source": "nix", "text": "NixOS rolls back atomically from a flake."}, ws)
         execute_tool("write_file", {"path": "notes.txt", "content": "Ollama serves local models on the GPU."}, ws)
@@ -816,6 +819,10 @@ def _self_test():
             os.environ.pop("HEARTH_DB", None)
         else:
             os.environ["HEARTH_DB"] = old_db
+        if old_embed is None:
+            os.environ.pop("HEARTH_EMBED_MODEL", None)
+        else:
+            os.environ["HEARTH_EMBED_MODEL"] = old_embed
     # web_fetch: the HTML-to-text helper strips tags and collapses whitespace.
     sample = "<html><head><style>x{}</style><script>var a=1;</script></head>" \
              "<body><h1>Title</h1><p>Hello   world</p><p>Line two</p></body></html>"
