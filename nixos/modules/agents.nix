@@ -35,6 +35,15 @@ let
       exec ${pkgs.python3}/bin/python3 ${agentSrc}/hearth_state.py "$@"
     '';
   };
+
+  # hearth-doctor: one-command health check of the install.
+  hearthDoctor = pkgs.writeShellApplication {
+    name = "hearth-doctor";
+    runtimeInputs = [ pkgs.python3 ];
+    text = ''
+      exec ${pkgs.python3}/bin/python3 ${agentSrc}/hearth_doctor.py "$@"
+    '';
+  };
 in
 {
   options.hearth.agents = {
@@ -95,6 +104,7 @@ in
       hearthAgent
       hearthLoop
       hearthState
+      hearthDoctor
     ];
 
     # A demonstration agent that runs under the full sandbox profile and records

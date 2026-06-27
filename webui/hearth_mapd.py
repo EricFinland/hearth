@@ -59,6 +59,25 @@ def request_allowed(client_ip, auth_header, token):
     expected = "Bearer " + token
     return bool(auth_header) and auth_header == expected
 
+
+RATE_LIMIT = int(os.environ.get("HEARTH_RATE_LIMIT", "120"))  # requests per window
+RATE_WINDOW = 60.0  # seconds
+_RATE_STORE = {}
+_RATE_LOCK = threading.Lock()
+
+
+def rate_allow(ip, now, store, limit=RATE_LIMIT, window=RATE_WINDOW):
+    """Sliding-window rate check. Mutates store[ip] (a list of timestamps).
+    Returns True if the request is within the limit. Pure and testable."""
+    q = store.setdefault(ip, [])
+    cutoff = now - window
+    while q and q[0] < cutoff:
+        q.pop(0)
+    if len(q) >= limit:
+        return False
+    q.append(now)
+    return True
+
 # Created by the agent runtime; defined here too so /state and /events work even
 # before any agent has run.
 SCHEMA = """
@@ -961,6 +980,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/healthz" and not request_allowed(
                 self.client_address[0], self.headers.get("Authorization"), API_TOKEN):
             return self._send(403, "forbidden")
+        # Rate-limit remote callers (local cockpit/tools are trusted, unlimited).
+        ip = self.client_address[0]
+        if ip not in LOCAL_IPS:
+            with _RATE_LOCK:
+                ok = rate_allow(ip, time.monotonic(), _RATE_STORE)
+            if not ok:
+                return self._send(429, json.dumps({"error": "rate limit exceeded"}), "application/json")
         path = self.path.split("?", 1)[0]
         if path == "/chat":
             return self._handle_chat()
@@ -1337,6 +1363,13 @@ def _self_test():
     assert "hearth_runs_total" in mtxt and "# TYPE hearth_runs_total counter" in mtxt, mtxt
     assert 'hearth_daemon_up{unit="hearth-grow.service"} 1' in mtxt, mtxt
     assert "hearth_errors_total" in mtxt and "hearth_tokens_total" in mtxt, mtxt
+
+    # rate limiter: allows up to the limit in a window, then blocks; the window slides.
+    store = {}
+    assert all(rate_allow("1.2.3.4", 100.0 + i, store, limit=3, window=60) for i in range(3))
+    assert rate_allow("1.2.3.4", 100.1, store, limit=3, window=60) is False, "4th in window blocked"
+    assert rate_allow("9.9.9.9", 100.1, store, limit=3, window=60) is True, "other ip independent"
+    assert rate_allow("1.2.3.4", 200.0, store, limit=3, window=60) is True, "old hits expired -> allowed"
 
     print("hearth-mapd self-test OK")
     return 0

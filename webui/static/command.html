@@ -27,6 +27,12 @@
   #chat { grid-column: 1 / 2; grid-row: 2 / 3; }
   #launch { grid-column: 1 / 2; grid-row: 3 / 4; }
   #activity { grid-column: 1 / 3; grid-row: 4 / 5; }
+  /* On narrow screens (phones/tablets), stack everything in one scrolling column. */
+  @media (max-width: 720px) {
+    #grid { position: static; display: block; padding: 10px; height: auto; }
+    #grid > .card { grid-column: auto !important; grid-row: auto !important;
+      width: auto; margin-bottom: 12px; max-height: 60vh; }
+  }
   #chat select, #launch select { background:#0e2236; border:1px solid #16324f; color:#cfe6ff;
     padding:6px; border-radius:6px; }
   .agent { display:inline-block; margin:4px 8px; }
