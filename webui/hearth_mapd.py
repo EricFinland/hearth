@@ -438,6 +438,24 @@ def read_growth(db, repo=GROW_REPO, limit=40):
             "lessons": lessons, "branches": branches}
 
 
+def kick_spawn():
+    """Self-heal the queue watcher and actively process the queue. The
+    hearth-spawn.path unit can die into a 'failed' state and then silently
+    swallow every launch (queue files pile up, nothing spawns). After dropping a
+    queue file we (1) clear any failed state, (2) start hearth-spawn.service
+    directly so this run starts even if the path unit never fires, and (3)
+    re-arm the path unit for future launches. Best-effort; never raises."""
+    for args in (
+        ["reset-failed", "hearth-spawn.path", "hearth-spawn.service"],
+        ["start", "--no-block", "hearth-spawn.service"],
+        ["start", "hearth-spawn.path"],
+    ):
+        try:
+            subprocess.run([SUDO, "-n", SYSTEMCTL] + args, capture_output=True, text=True, timeout=12)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
 def grow_daemon_action(action):
     """Start or stop the always-on growth daemon. Returns (ok, detail)."""
     if action not in ("start", "stop", "restart"):
@@ -838,6 +856,7 @@ class Handler(BaseHTTPRequestHandler):
             os.replace(tmp, final)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
+        kick_spawn()
         self._send(200, json.dumps({"queued": run_id}), "application/json")
 
     def _handle_new_session(self):
