@@ -31,8 +31,11 @@
       # and the dashboard. wheel: sudo. networkmanager: manage WiFi.
       extraGroups = [ "wheel" "networkmanager" "hearth" ];
       openssh.authorizedKeys.keys = config.hearth.adminKeys;
-      # Console fallback for a local login. Change it on first boot with
-      # `passwd`. SSH itself still requires a key.
+      # SECURITY: this is a well-known DEFAULT password for the very first local
+      # console login only (SSH is key-only; remote password auth is disabled in
+      # base.nix). CHANGE IT IMMEDIATELY after first boot with `passwd`, or set
+      # your own users.users.operator.hashedPassword before building. Left as a
+      # convenience default so a fresh build is not locked out at the console.
       initialPassword = "hearth";
     };
   };

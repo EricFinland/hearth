@@ -23,6 +23,8 @@ Most people run local agents with full system privileges and no record of what t
 
 > It is not a custom kernel or a remastered distro. It is a declarative NixOS system you `nixos-rebuild switch` into existence.
 
+> **Status:** young but real. The core (sandboxed agents, audit log, reproducible flake, web cockpit) runs on real hardware today. The autonomous layers (self-improvement loop, swarm, self-evolve) are newer and gated so they only ever produce reviewable branches, never auto-change a running system. Local model quality is the honest ceiling. Pin a commit and read the [changelog](docs/) before updating.
+
 ## What makes it different
 
 |  |  |
@@ -121,8 +123,20 @@ Full install paths (existing NixOS host, fresh VM, or a Linux primer) live in th
 
 ---
 
+## Contributing & security
+
+Contributions are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md) for the build
+and self-test workflow. Found a security issue? Please follow
+[SECURITY.md](SECURITY.md) rather than opening a public issue.
+
+> **First-boot note:** the config ships a default console password for the very
+> first local login (SSH is key-only). Change it immediately with `passwd`. See
+> [SECURITY.md](SECURITY.md).
+
+---
+
 <div align="center">
 
-Built by <a href="https://github.com/EricFinland">Eric Catalano</a> &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; <a href="https://ericfinland.github.io/hearth/">Docs</a>
+Built by <a href="https://github.com/EricFinland">Eric Catalano</a> &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; <a href="https://ericfinland.github.io/hearth/">Docs</a> &nbsp;·&nbsp; <a href="CONTRIBUTING.md">Contribute</a> &nbsp;·&nbsp; <a href="SECURITY.md">Security</a>
 
 </div>

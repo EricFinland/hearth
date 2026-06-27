@@ -10,7 +10,7 @@ Every idea here should deepen one of hearth's three guarantees or show one off:
 3. The whole system is legible and reproducible from boot.
 
 Tags: `[stretch]` = already captured in the FEATURES stretch list; `[new]` = new
-idea from brainstorming. Effort and impact are rough gut calls to help sequencing.
+idea from the backlog. Effort and impact are rough gut calls to help sequencing.
 
 ## Top picks to build first
 

@@ -3,7 +3,7 @@
 current permission mode. Pure and I/O-free so it is trivially testable and shared
 by every drive path (interactive sessions and background workers).
 
-Modes (mirroring Claude Code):
+Permission modes:
   plan   - read-only; the agent may look but change nothing, then must produce a plan.
   auto   - safe reads and file edits run automatically; dangerous actions are gated
            (the user must approve each one).
