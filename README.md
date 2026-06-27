@@ -11,6 +11,7 @@
 ![Sandboxed](https://img.shields.io/badge/agents-sandboxed-cc785c?style=flat-square&logo=linux&logoColor=white&labelColor=211c16)
 ![Audited](https://img.shields.io/badge/every%20run-audited-cc785c?style=flat-square&logo=sqlite&logoColor=white&labelColor=211c16)
 ![License](https://img.shields.io/badge/license-MIT-cc785c?style=flat-square&labelColor=211c16)
+[![release](https://img.shields.io/github/v/release/EricFinland/hearth?style=flat-square&labelColor=211c16&color=cc785c)](https://github.com/EricFinland/hearth/releases)
 
 ### Local LLMs and autonomous agents, sandboxed by default. Every run audited. The whole OS reproducible from one flake.
 
@@ -24,7 +25,7 @@ Most people run local agents with full system privileges and no record of what t
 
 > It is not a custom kernel or a remastered distro. It is a declarative NixOS system you `nixos-rebuild switch` into existence.
 
-> **Status:** young but real. The core (sandboxed agents, audit log, reproducible flake, web cockpit) runs on real hardware today. The autonomous layers (self-improvement loop, swarm, self-evolve) are newer and gated so they only ever produce reviewable branches, never auto-change a running system. Local model quality is the honest ceiling. Pin a commit and read the [changelog](docs/) before updating.
+> **Status: v1.0, stable.** The whole stack runs on real hardware: sandboxed agents, the audit log, the reproducible flake, the web cockpit, an OpenAI-compatible API, a local knowledge base, a standing-missions scheduler, and the self-improvement loop (which only ever produces reviewable, gated branches, never auto-changing a running system). Local model quality is the honest ceiling. See the [CHANGELOG](CHANGELOG.md).
 
 ## What makes it different
 
@@ -104,6 +105,20 @@ Full install paths (existing NixOS host, fresh VM, or a Linux primer) live in th
 
 ### → **[ericfinland.github.io/hearth](https://ericfinland.github.io/hearth/)**
 
+### Use it
+
+```sh
+# Point any OpenAI client at your local models (audited):
+curl http://your-hearth:8770/v1/chat/completions \
+  -d '{"model":"llama3.2:3b","messages":[{"role":"user","content":"hello"}],"stream":true}'
+
+# Check the install is healthy:
+hearth-doctor
+
+# Watch activity in Grafana, etc:
+curl http://your-hearth:8770/metrics
+```
+
 <details>
 <summary><b>The full feature set</b></summary>
 
@@ -114,11 +129,15 @@ Full install paths (existing NixOS host, fresh VM, or a Linux primer) live in th
 - **Tool-using agent loop** (`hearth-loop`): a model gets a goal and tools (run commands, read and write files, HTTP), runs in a per-run workspace, and is audited.
 - **Least-privilege sandbox** with a written threat model: `ProtectSystem=strict`, `ProtectHome`, `NoNewPrivileges`, empty capabilities, a syscall filter, and per-run private temp.
 - **Per-run audit log** in SQLite, queryable with `hearth-runs`.
-- **Web command center:** chat with a local model and launch sandboxed agents from the browser.
+- **Web command center:** chat with a local model and launch sandboxed agents from the browser, with permission modes, an approvals queue, and a kill switch.
+- **OpenAI-compatible API** (`/v1/chat/completions` with real token streaming, `/v1/models`): any OpenAI client uses your local models, every call audited.
+- **Knowledge base (RAG):** ingest docs or a whole repo (`index_dir`), semantic retrieval via local embeddings with lexical fallback, auto-recalled into agent context.
+- **Standing missions:** a scheduler that runs missions on a cadence (the works-while-you-sleep layer).
+- **Self-improvement loop:** an always-on daemon proposes changes to hearth's own config, validates them with `nix flake check`, compounds and learns, and produces reviewable branches with one-click promote-to-live and an auto-rollback watchdog.
+- **Observability:** a Prometheus `/metrics` endpoint, a usage-over-time stats view, and `hearth-doctor` for a one-command health check.
 - **Agent credentials by name:** keys are substituted at request time via systemd credentials, so the model never sees the secret value.
-- **MCP audit gate:** no audit-required MCP server starts without an approval file.
-- **Optional KDE Plasma desktop** for hosts with a screen.
-- **Tailscale mesh** plus a tight firewall, secrets via sops-nix, and a boot dashboard that shows system state on login.
+- **More agent tools:** grep, multi-file edit, directory tree, web-to-knowledge, and more.
+- **Optional KDE Plasma desktop**, a Tailscale mesh with a tight firewall, secrets via sops-nix, and a boot dashboard.
 
 </details>
 
