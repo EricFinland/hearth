@@ -350,9 +350,33 @@ def make_db_transport(db, agent_id, poll_interval=0.5):
     return emit, control
 
 
+def _recalled_context(db, goal, kb_limit=3, mem_limit=3):
+    """Pull the knowledge-base chunks and memory lessons most relevant to the
+    goal, so an agent starts grounded without having to search first. Best-effort:
+    any failure (or an empty store) returns ''. Lazy imports keep this optional."""
+    parts = []
+    try:
+        import hearth_knowledge
+        hits = hearth_knowledge.search(db, goal, limit=kb_limit)
+        ctx = hearth_knowledge.as_context(hits)
+        if ctx:
+            parts.append(ctx)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import hearth_memory
+        lessons = hearth_memory.recall(db, goal, limit=mem_limit)
+        ctx = hearth_memory.as_context(lessons)
+        if ctx:
+            parts.append(ctx)
+    except Exception:  # noqa: BLE001
+        pass
+    return "\n\n".join(parts)
+
+
 def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
              ollama_url=DEFAULT_OLLAMA, max_iters=MAX_ITERS, chat_fn=None,
-             mode="auto", auto_allow=(), emit_fn=None, control_fn=None):
+             mode="auto", auto_allow=(), emit_fn=None, control_fn=None, recall=True):
     """Drive a one-shot agent run. chat_fn/emit_fn/control_fn are injectable for
     testing; by default the loop talks Ollama and reads/writes the JSON protocol
     on stdin/stdout."""
@@ -360,8 +384,14 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
     emit = emit_fn or _stdout_emit
     control = control_fn or _stdin_control
     os.makedirs(workspace, exist_ok=True)
-    messages = [{"role": "system", "content": _system_for(mode)},
-                {"role": "user", "content": goal}]
+    messages = [{"role": "system", "content": _system_for(mode)}]
+    if recall:
+        ctx = _recalled_context(db, goal)
+        if ctx:
+            messages.append({"role": "system", "content":
+                             "Context retrieved from hearth's knowledge base and past runs. "
+                             "Use it if relevant:\n" + ctx})
+    messages.append({"role": "user", "content": goal})
     state = {"mode": mode}
     _emit(agent_name, "SPAWNING", "starting", db)
     emit({"type": "state", "state": "SPAWNING", "detail": "starting"})
@@ -459,6 +489,13 @@ def _self_test():
 
     ws = tempfile.mkdtemp(prefix="hearth-loop-")
     db = os.path.join(ws, "audit.db")
+    # auto-recall: with a knowledge base populated, the recalled context surfaces
+    # the relevant chunk for a goal (and run_loop injects it as a system message).
+    import hearth_knowledge
+    hearth_knowledge.ingest(db, "nix.md", "NixOS rollback is atomic and reproducible from a flake.")
+    rctx = _recalled_context(db, "rollback flake atomic")
+    assert "rollback" in rctx.lower(), ("recall surfaces the relevant chunk", rctx)
+    assert _recalled_context(db, "zzzqqq nothing matches") == "", "no lexical overlap -> no context"
     steps = [
         ({"role": "assistant", "tool_calls": [{"function": {"name": "write_file",
             "arguments": {"path": "hi.txt", "content": "hello world"}}}]}, 3),
