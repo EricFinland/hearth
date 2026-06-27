@@ -46,6 +46,7 @@ RISK = {
     "kb_add": "edit",
     "replace_in_files": "edit",
     "fetch_to_kb": "dangerous",
+    "index_dir": "edit",
 }
 
 

@@ -639,6 +639,28 @@ def tool_fetch_to_kb(args, workspace):
     return "fetched and added '{}' to the knowledge base ({} chunk{})".format(source, n, "s" if n != 1 else "")
 
 
+def tool_index_dir(args, workspace):
+    """Index a directory (under the workspace) into the knowledge base so it can
+    be searched. Provide name and path; optional comma-separated globs."""
+    import hearth_project
+    name = (args.get("name") or "").strip()
+    if not name:
+        return "error: a project 'name' is required"
+    try:
+        root = _safe_join(workspace, args.get("path", "."))
+    except ValueError as exc:
+        return "error: {}".format(exc)
+    globs = None
+    if args.get("globs"):
+        globs = [g.strip() for g in str(args["globs"]).split(",") if g.strip()]
+    import hearth_knowledge
+    res = hearth_project.index_dir(_kb_db(), name, root, embed_fn=hearth_knowledge.make_embedder(), globs=globs)
+    if res.get("error"):
+        return "error: {}".format(res["error"])
+    return ("indexed '{}': {} files, {} chunks ({} skipped){}").format(
+        name, res["files"], res["chunks"], res["skipped"], ", truncated" if res["truncated"] else "")
+
+
 def tool_kb_search(args, workspace):
     """Search the local knowledge base for chunks relevant to a query."""
     import hearth_knowledge
@@ -810,6 +832,14 @@ TOOLS = [
         "fn": tool_kb_search,
     },
     {
+        "name": "index_dir",
+        "description": "Index a directory of code/text files (under the workspace) into the knowledge base so you can search it. Provide a project name and path. Use before kb_search to learn a codebase.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string"}, "path": {"type": "string"}, "globs": {"type": "string"}},
+            "required": ["name", "path"]},
+        "fn": tool_index_dir,
+    },
+    {
         "name": "replace_in_files",
         "description": "Find/replace exact text across all matching files under a path (a multi-file refactor). Optional glob filters filenames (e.g. *.py).",
         "parameters": {"type": "object", "properties": {
@@ -883,6 +913,11 @@ def _self_test():
         assert "added" in execute_tool("kb_add", {"source": "notes", "path": "notes.txt"}, ws)
         found = execute_tool("kb_search", {"query": "rollback flake"}, ws)
         assert "nix" in found and "atomically" in found, found
+        # index_dir: ingest a workspace subtree, then it is searchable
+        execute_tool("write_file", {"path": "proj/readme.md", "content": "The widget service handles billing events."}, ws)
+        idx = execute_tool("index_dir", {"name": "proj", "path": "proj"}, ws)
+        assert "indexed 'proj'" in idx and "1 files" in idx, idx
+        assert "billing" in execute_tool("kb_search", {"query": "widget billing events"}, ws)
         assert "no relevant" in execute_tool("kb_search", {"query": "zzz_nothing_qqq"}, ws)
         # replace_in_files: multi-file find/replace
         execute_tool("write_file", {"path": "r/a.py", "content": "VER = 1\n"}, ws)
