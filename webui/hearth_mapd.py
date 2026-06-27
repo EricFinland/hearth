@@ -714,6 +714,25 @@ def chat_once(base_url, model, messages, timeout=300):
     return reply, int(data.get("prompt_eval_count", 0) or 0), int(data.get("eval_count", 0) or 0)
 
 
+def chat_stream(base_url, model, messages, timeout=300):
+    """Yield (content_delta, done, prompt_tokens, eval_tokens) from Ollama's
+    streaming chat, so the OpenAI endpoint can forward real tokens as they arrive."""
+    body = json.dumps({"model": model, "messages": messages, "stream": True}).encode()
+    req = urllib.request.Request(base_url.rstrip("/") + "/api/chat", data=body,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        for line in resp:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            yield ((d.get("message") or {}).get("content", ""), bool(d.get("done")),
+                   int(d.get("prompt_eval_count", 0) or 0), int(d.get("eval_count", 0) or 0))
+
+
 def openai_completion(model, reply, tin, tout, created, cid):
     """Shape a non-streaming OpenAI /v1/chat/completions response body."""
     return {
@@ -974,21 +993,22 @@ class Handler(BaseHTTPRequestHandler):
         created = int(time.time())
         cid = "chatcmpl-" + uuid.uuid4().hex[:24]
         t0 = time.monotonic()
-        error = None
-        reply, tin, tout = "", 0, 0
-        try:
-            reply, tin, tout = chat_once(OLLAMA_URL, model, messages)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            error = "{}: {}".format(type(exc).__name__, exc)
-        latency = int((time.monotonic() - t0) * 1000)
-        _record_chat_run(self.db, "openai-api", model, tin, tout, latency, error)
-        if error:
-            return self._send(502, json.dumps({"error": {"message": error, "type": "upstream_error"}}),
-                              "application/json")
+
         if not stream:
+            error, reply, tin, tout = None, "", 0, 0
+            try:
+                reply, tin, tout = chat_once(OLLAMA_URL, model, messages)
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                error = "{}: {}".format(type(exc).__name__, exc)
+            _record_chat_run(self.db, "openai-api", model, tin, tout,
+                             int((time.monotonic() - t0) * 1000), error)
+            if error:
+                return self._send(502, json.dumps({"error": {"message": error, "type": "upstream_error"}}),
+                                  "application/json")
             return self._send(200, json.dumps(openai_completion(model, reply, tin, tout, created, cid)),
                               "application/json")
-        # Streaming: role delta, content delta, stop, [DONE].
+
+        # Streaming: forward Ollama tokens as OpenAI chunks as they arrive.
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -997,14 +1017,22 @@ class Handler(BaseHTTPRequestHandler):
         def _chunk(delta, finish=None):
             self.wfile.write(("data: " + json.dumps(openai_chunk(model, created, cid, delta, finish)) + "\n\n").encode())
             self.wfile.flush()
+        full, tin, tout, error = "", 0, 0, None
         try:
             _chunk({"role": "assistant"})
-            _chunk({"content": reply})
+            for delta, done, p, e in chat_stream(OLLAMA_URL, model, messages):
+                if delta:
+                    full += delta
+                    _chunk({"content": delta})
+                if done:
+                    tin, tout = p, e
             _chunk({}, finish="stop")
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
-        except (BrokenPipeError, OSError):
-            pass
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            error = "{}: {}".format(type(exc).__name__, exc)
+        _record_chat_run(self.db, "openai-api", model, tin, tout,
+                         int((time.monotonic() - t0) * 1000), error)
 
     def _handle_run(self):
         req = self._read_json_body()
