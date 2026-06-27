@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an idea for hearth
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The use case or pain point, not just the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+  - type: dropdown
+    id: guarantee
+    attributes:
+      label: Which of hearth's guarantees does it deepen?
+      options:
+        - Agents sandboxed by default
+        - Every run audited
+        - Reproducible and legible from boot
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

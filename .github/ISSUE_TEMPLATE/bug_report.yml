@@ -1,0 +1,42 @@
+name: Bug report
+description: Something in hearth is not working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please do NOT include secrets,
+        tokens, or private keys in any field.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: hearth version / commit
+      description: A release tag, or `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Host (bare metal or VM), GPU, NixOS version, and any relevant hearth.* toggles.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output from journalctl, hearth-runs, or nix. Redact anything sensitive.
+      render: shell

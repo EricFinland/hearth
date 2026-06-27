@@ -5,6 +5,7 @@
 <br/>
 <br/>
 
+[![build](https://img.shields.io/github/actions/workflow/status/EricFinland/hearth/build.yml?style=flat-square&logo=githubactions&logoColor=white&label=build&labelColor=211c16&color=cc785c)](https://github.com/EricFinland/hearth/actions/workflows/build.yml)
 ![NixOS](https://img.shields.io/badge/NixOS-flake-cc785c?style=flat-square&logo=nixos&logoColor=white&labelColor=211c16)
 ![Ollama](https://img.shields.io/badge/LLMs-Ollama-cc785c?style=flat-square&logo=ollama&logoColor=white&labelColor=211c16)
 ![Sandboxed](https://img.shields.io/badge/agents-sandboxed-cc785c?style=flat-square&logo=linux&logoColor=white&labelColor=211c16)
