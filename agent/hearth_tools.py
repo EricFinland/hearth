@@ -8,6 +8,7 @@ All file/command tools operate inside the per-run workspace and refuse paths tha
 escape it, as defence in depth on top of the systemd sandbox.
 """
 
+import fnmatch
 import glob
 import html as _htmlmod
 import json
@@ -156,6 +157,107 @@ def tool_list_files(args, workspace):
         return "\n".join(sorted(os.listdir(full))) or "(empty)"
     except OSError as exc:
         return "error: {}".format(exc)
+
+
+_TREE_SKIP = {".git", "__pycache__", "node_modules", "result", ".direnv", ".mypy_cache"}
+
+
+def tool_search_files(args, workspace):
+    """Search files under a path for a regex (or literal) query. Returns
+    relpath:lineno: line for each match, capped."""
+    query = args.get("query", "")
+    if not query:
+        return "error: no query"
+    try:
+        base = _safe_join(workspace, args.get("path", "."))
+    except ValueError as exc:
+        return "error: {}".format(exc)
+    try:
+        rx = re.compile(query)
+    except re.error:
+        rx = re.compile(re.escape(query))
+    pattern = args.get("glob")
+    root = os.path.realpath(workspace)
+    hits = []
+    for dirpath, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in _TREE_SKIP]
+        for fn in sorted(files):
+            if pattern and not fnmatch.fnmatch(fn, pattern):
+                continue
+            fp = os.path.join(dirpath, fn)
+            try:
+                if os.path.getsize(fp) > 2_000_000:
+                    continue
+                with open(fp, "r", errors="replace") as fh:
+                    for i, line in enumerate(fh, 1):
+                        if rx.search(line):
+                            hits.append("{}:{}: {}".format(os.path.relpath(fp, root), i, line.rstrip()[:200]))
+                            if len(hits) >= 200:
+                                return "\n".join(hits) + "\n... (truncated at 200 matches)"
+            except OSError:
+                continue
+    return "\n".join(hits) if hits else "no matches"
+
+
+def tool_list_tree(args, workspace):
+    """Render an indented directory tree under a path (common build/VCS dirs skipped)."""
+    try:
+        base = _safe_join(workspace, args.get("path", "."))
+    except ValueError as exc:
+        return "error: {}".format(exc)
+    try:
+        max_depth = max(1, int(args.get("max_depth", 4) or 4))
+    except (TypeError, ValueError):
+        max_depth = 4
+    root = os.path.realpath(workspace)
+    base_depth = base.rstrip(os.sep).count(os.sep)
+    lines = []
+    for dirpath, dirs, files in os.walk(base):
+        depth = dirpath.rstrip(os.sep).count(os.sep) - base_depth
+        if depth >= max_depth:
+            dirs[:] = []
+            continue
+        dirs[:] = sorted(d for d in dirs if d not in _TREE_SKIP)
+        rel = os.path.relpath(dirpath, root)
+        indent = "  " * depth
+        lines.append("{}{}/".format(indent, "." if rel == "." else os.path.basename(dirpath)))
+        for fn in sorted(files):
+            lines.append("{}  {}".format(indent, fn))
+        if len(lines) >= 400:
+            lines.append("... (truncated)")
+            break
+    return "\n".join(lines) or "(empty)"
+
+
+def tool_edit_file(args, workspace):
+    """Edit a file by replacing exact text: find -> replace. Replaces the first
+    match, or every match when all=true. Errors (no change) if find is absent, so
+    the model knows to re-read the file. More reliable for local models than diffs."""
+    try:
+        full = _safe_join(workspace, args.get("path"))
+    except ValueError as exc:
+        return "error: {}".format(exc)
+    find = args.get("find")
+    if not find:
+        return "error: no 'find' text given"
+    replace = args.get("replace", "")
+    try:
+        with open(full) as fh:
+            content = fh.read()
+    except OSError as exc:
+        return "error: {}".format(exc)
+    count = content.count(find)
+    if count == 0:
+        return "error: 'find' text not found in {}; re-read the file and try again (no changes made)".format(args.get("path"))
+    if args.get("all"):
+        content = content.replace(find, replace)
+        n = count
+    else:
+        content = content.replace(find, replace, 1)
+        n = 1
+    with open(full, "w") as fh:
+        fh.write(content)
+    return "edited {}: {} replacement{}".format(args.get("path"), n, "s" if n != 1 else "")
 
 
 def _resolve_cred(name):
@@ -491,6 +593,30 @@ TOOLS = [
         "fn": tool_list_files,
     },
     {
+        "name": "list_tree",
+        "description": "Show an indented directory tree under a path (skips .git, __pycache__, node_modules). Use to understand a project's layout.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "max_depth": {"type": "integer"}}},
+        "fn": tool_list_tree,
+    },
+    {
+        "name": "search_files",
+        "description": "Search files under a path for a regex or text query (like grep). Returns path:line: text. Optional glob filters filenames (e.g. *.py).",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string"}, "path": {"type": "string"}, "glob": {"type": "string"}},
+            "required": ["query"]},
+        "fn": tool_search_files,
+    },
+    {
+        "name": "edit_file",
+        "description": "Edit a file by exact text replacement: replaces 'find' with 'replace' (first match, or all=true for every match). Errors without changing anything if 'find' is not present.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "find": {"type": "string"},
+            "replace": {"type": "string"}, "all": {"type": "boolean"}},
+            "required": ["path", "find"]},
+        "fn": tool_edit_file,
+    },
+    {
         "name": "web_fetch",
         "description": "Fetch a web page and return its readable text (HTML tags stripped). Provide url.",
         "parameters": {"type": "object", "properties": {"url": {"type": "string"}},
@@ -611,6 +737,18 @@ def _self_test():
     assert "hello" in out and "exit=0" in out, out
     assert "escapes workspace" in execute_tool("write_file", {"path": "../evil", "content": "x"}, ws)
     assert len(ollama_tool_specs()) == len(TOOLS)
+    # list_tree shows the layout; search_files greps; edit_file does find/replace.
+    execute_tool("write_file", {"path": "src/app.py", "content": "x = 1\nprint(x)\n"}, ws)
+    tree = execute_tool("list_tree", {}, ws)
+    assert "src/" in tree and "app.py" in tree, tree
+    hits = execute_tool("search_files", {"query": "print", "glob": "*.py"}, ws)
+    assert "app.py" in hits and "print(x)" in hits, hits
+    assert execute_tool("search_files", {"query": "nonexistent_zzz"}, ws) == "no matches"
+    ed = execute_tool("edit_file", {"path": "src/app.py", "find": "x = 1", "replace": "x = 42"}, ws)
+    assert "1 replacement" in ed, ed
+    assert "x = 42" in execute_tool("read_file", {"path": "src/app.py"}, ws)
+    miss = execute_tool("edit_file", {"path": "src/app.py", "find": "not there", "replace": "y"}, ws)
+    assert "not found" in miss, ("edit_file errors cleanly when find absent", miss)
     # web_fetch: the HTML-to-text helper strips tags and collapses whitespace.
     sample = "<html><head><style>x{}</style><script>var a=1;</script></head>" \
              "<body><h1>Title</h1><p>Hello   world</p><p>Line two</p></body></html>"

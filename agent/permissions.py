@@ -24,6 +24,9 @@ MODES = ("plan", "auto", "bypass")
 RISK = {
     "read_file": "safe",
     "list_files": "safe",
+    "list_tree": "safe",
+    "search_files": "safe",
+    "edit_file": "edit",
     "current_generation": "safe",
     "list_generations": "safe",
     "system_health": "safe",
@@ -113,6 +116,10 @@ def _self_test():
         assert risk_of(t) == "safe", t
         assert decide("plan", t) == "allow", t
     assert risk_of("remember") == "safe" and risk_of("recall") == "safe"
+    assert risk_of("list_tree") == "safe" and risk_of("search_files") == "safe"
+    assert risk_of("edit_file") == "edit"
+    assert decide("plan", "search_files") == "allow" and decide("plan", "edit_file") == "deny"
+    assert decide("auto", "edit_file") == "allow"
     assert decide("plan", "recall") == "allow"
     print("hearth-permissions self-test OK")
     return 0
