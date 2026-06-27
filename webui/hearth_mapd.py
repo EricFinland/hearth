@@ -617,6 +617,28 @@ def chat_once(base_url, model, messages, timeout=300):
     return reply, int(data.get("prompt_eval_count", 0) or 0), int(data.get("eval_count", 0) or 0)
 
 
+def openai_completion(model, reply, tin, tout, created, cid):
+    """Shape a non-streaming OpenAI /v1/chat/completions response body."""
+    return {
+        "id": cid, "object": "chat.completion", "created": created, "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": reply},
+                     "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": tin, "completion_tokens": tout, "total_tokens": tin + tout},
+    }
+
+
+def openai_chunk(model, created, cid, delta, finish=None):
+    """One OpenAI streaming chunk (chat.completion.chunk)."""
+    return {"id": cid, "object": "chat.completion.chunk", "created": created, "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+
+
+def openai_models(models, created):
+    """Shape an OpenAI /v1/models list from local model ids."""
+    return {"object": "list", "data": [
+        {"id": m, "object": "model", "created": created, "owned_by": "hearth"} for m in models]}
+
+
 class Session:
     """One interactive agent run: a `hearth-loop --session` child process whose
     stdout JSON events are pumped into an in-memory buffer by a reader thread, and
@@ -740,6 +762,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(read_stats()), "application/json")
         if path == "/models":
             return self._send(200, json.dumps({"models": read_models()}), "application/json")
+        if path in ("/v1/models", "/v1/models/"):
+            return self._send(200, json.dumps(openai_models(read_models(), int(time.time()))),
+                              "application/json")
         if path == "/runs":
             return self._send(200, json.dumps({"runs": read_runs(self.db)}), "application/json")
         if path == "/command":
@@ -801,6 +826,8 @@ class Handler(BaseHTTPRequestHandler):
             req = self._read_json_body()
             ok, detail = promote_run(req.get("mode") or "")
             return self._send(200, json.dumps({"ok": ok, "detail": detail}), "application/json")
+        if path in ("/v1/chat/completions", "/chat/completions"):
+            return self._handle_openai_chat()
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "send":
             return self._handle_session_send(parts[1])
@@ -823,6 +850,54 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, json.dumps({"reply": reply, "error": error,
                                     "tokens_in": tin, "tokens_out": tout}),
                    "application/json")
+
+    def _handle_openai_chat(self):
+        """OpenAI-compatible /v1/chat/completions: any OpenAI client can point at
+        hearth and get a local model, with the call recorded to the audit log.
+        Supports stream:true (SSE chunks). Auth reuses the bearer token."""
+        req = self._read_json_body()
+        messages = req.get("messages") or []
+        model = req.get("model") or ""
+        # Map an unknown/placeholder model (clients often send "gpt-4o" etc.) to a
+        # real local model so generic OpenAI configs just work.
+        avail = read_models()
+        if model not in avail:
+            model = avail[0] if avail else "llama3.2:3b"
+        stream = bool(req.get("stream"))
+        created = int(time.time())
+        cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+        t0 = time.monotonic()
+        error = None
+        reply, tin, tout = "", 0, 0
+        try:
+            reply, tin, tout = chat_once(OLLAMA_URL, model, messages)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            error = "{}: {}".format(type(exc).__name__, exc)
+        latency = int((time.monotonic() - t0) * 1000)
+        _record_chat_run(self.db, "openai-api", model, tin, tout, latency, error)
+        if error:
+            return self._send(502, json.dumps({"error": {"message": error, "type": "upstream_error"}}),
+                              "application/json")
+        if not stream:
+            return self._send(200, json.dumps(openai_completion(model, reply, tin, tout, created, cid)),
+                              "application/json")
+        # Streaming: role delta, content delta, stop, [DONE].
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def _chunk(delta, finish=None):
+            self.wfile.write(("data: " + json.dumps(openai_chunk(model, created, cid, delta, finish)) + "\n\n").encode())
+            self.wfile.flush()
+        try:
+            _chunk({"role": "assistant"})
+            _chunk({"content": reply})
+            _chunk({}, finish="stop")
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, OSError):
+            pass
 
     def _handle_run(self):
         req = self._read_json_body()
@@ -1061,6 +1136,17 @@ def _self_test():
     nodes = {n["agent_id"]: n for n in read_tree(tdb)}
     assert nodes["mgr"]["kind"] == "manager" and nodes["mgr"]["state"] == "WAITING_IO", nodes
     assert nodes["mgr-s1"]["parent_id"] == "mgr" and nodes["mgr-s1"]["state"] is None, nodes
+    # OpenAI-compatible response shaping
+    comp = openai_completion("llama3.2:3b", "hi there", 5, 2, 1000, "chatcmpl-x")
+    assert comp["object"] == "chat.completion" and comp["choices"][0]["message"]["content"] == "hi there", comp
+    assert comp["usage"]["total_tokens"] == 7 and comp["choices"][0]["finish_reason"] == "stop", comp
+    ch = openai_chunk("m", 1, "id", {"content": "x"})
+    assert ch["object"] == "chat.completion.chunk" and ch["choices"][0]["delta"] == {"content": "x"}, ch
+    assert ch["choices"][0]["finish_reason"] is None
+    ml = openai_models(["a", "b"], 1)
+    assert ml["object"] == "list" and [d["id"] for d in ml["data"]] == ["a", "b"], ml
+    assert all(d["object"] == "model" for d in ml["data"]), ml
+
     print("hearth-mapd self-test OK")
     return 0
 
