@@ -438,6 +438,72 @@ def read_growth(db, repo=GROW_REPO, limit=40):
             "lessons": lessons, "branches": branches}
 
 
+SCHEDULE_REGISTRY = "/var/lib/hearth/scheduler/schedule.json"
+
+
+def read_schedule(path=SCHEDULE_REGISTRY):
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def write_schedule(missions, path=SCHEDULE_REGISTRY):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(missions, fh, indent=2)
+    os.replace(tmp, path)
+
+
+def schedule_add(req, path=SCHEDULE_REGISTRY):
+    """Add a standing mission from a request dict. Returns (id, error)."""
+    sched = {}
+    if req.get("every_minutes"):
+        try:
+            sched = {"every_minutes": int(req["every_minutes"])}
+        except (ValueError, TypeError):
+            sched = {}
+    elif req.get("at"):
+        sched = {"at": str(req["at"])[:5]}
+    goal = (req.get("goal") or "").strip()
+    if not goal or not sched:
+        return None, "goal and a schedule (every_minutes or at HH:MM) are required"
+    m = {"id": "m-" + uuid.uuid4().hex[:8], "name": (req.get("name") or "mission")[:60],
+         "goal": goal, "model": req.get("model") or "qwen2.5-coder",
+         "mode": req.get("mode") or "bypass", "kind": req.get("kind") or "agent",
+         "schedule": sched, "enabled": True, "last_run": None}
+    missions = read_schedule(path)
+    missions.append(m)
+    write_schedule(missions, path)
+    return m["id"], ""
+
+
+def schedule_remove(mid, path=SCHEDULE_REGISTRY):
+    missions = read_schedule(path)
+    kept = [m for m in missions if m.get("id") != mid]
+    if len(kept) != len(missions):
+        write_schedule(kept, path)
+        return True
+    return False
+
+
+def schedule_toggle(mid, path=SCHEDULE_REGISTRY):
+    missions = read_schedule(path)
+    found = False
+    for m in missions:
+        if m.get("id") == mid:
+            m["enabled"] = not m.get("enabled", True)
+            found = True
+    if found:
+        write_schedule(missions, path)
+    return found
+
+
 def kick_spawn():
     """Self-heal the queue watcher and actively process the queue. The
     hearth-spawn.path unit can die into a 'failed' state and then silently
@@ -788,6 +854,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(promote_status()), "application/json")
         if path == "/promote/history":
             return self._send(200, json.dumps({"history": read_promote_history()}), "application/json")
+        if path == "/schedule":
+            return self._send(200, json.dumps({"missions": read_schedule()}), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
@@ -828,7 +896,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"ok": ok, "detail": detail}), "application/json")
         if path in ("/v1/chat/completions", "/chat/completions"):
             return self._handle_openai_chat()
+        if path == "/schedule":
+            mid, err = schedule_add(self._read_json_body())
+            return self._send(200 if mid else 400, json.dumps({"id": mid, "error": err}), "application/json")
         parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "schedule" and parts[2] in ("delete", "toggle"):
+            ok = (schedule_remove(parts[1]) if parts[2] == "delete" else schedule_toggle(parts[1]))
+            return self._send(200, json.dumps({"ok": ok}), "application/json")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "send":
             return self._handle_session_send(parts[1])
         return self._send(404, "not found")
@@ -1146,6 +1220,20 @@ def _self_test():
     ml = openai_models(["a", "b"], 1)
     assert ml["object"] == "list" and [d["id"] for d in ml["data"]] == ["a", "b"], ml
     assert all(d["object"] == "model" for d in ml["data"]), ml
+
+    # schedule registry helpers (add / read / toggle / remove) on a temp path
+    import tempfile
+    sreg = os.path.join(tempfile.mkdtemp(prefix="hearth-sched-"), "s.json")
+    assert read_schedule(sreg) == []
+    mid, err = schedule_add({"name": "digest", "goal": "summarize the day",
+                             "every_minutes": 1440, "kind": "marathon"}, path=sreg)
+    assert mid and not err, (mid, err)
+    got = read_schedule(sreg)
+    assert len(got) == 1 and got[0]["schedule"] == {"every_minutes": 1440}, got
+    _, err2 = schedule_add({"name": "bad"}, path=sreg)  # no goal/schedule
+    assert err2, "missing goal/schedule rejected"
+    assert schedule_toggle(mid, path=sreg) and read_schedule(sreg)[0]["enabled"] is False
+    assert schedule_remove(mid, path=sreg) and read_schedule(sreg) == []
 
     print("hearth-mapd self-test OK")
     return 0

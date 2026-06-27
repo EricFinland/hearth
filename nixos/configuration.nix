@@ -18,6 +18,7 @@
     ./modules/spawn.nix
     ./modules/creator.nix
     ./modules/grow.nix
+    ./modules/schedule.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this

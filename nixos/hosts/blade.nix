@@ -38,6 +38,10 @@
   # live system) and learns from each one. Paced so it does not peg the GPU.
   hearth.grow.enable = true;
 
+  # Standing missions: a timer checks the mission registry and dispatches any
+  # that are due (the "works while you sleep" layer).
+  hearth.schedule.enable = true;
+
   home-manager.useGlobalPkgs = true;
   home-manager.useUserPackages = true;
   home-manager.users.operator = import ../home/operator.nix;
