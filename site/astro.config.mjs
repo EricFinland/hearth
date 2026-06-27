@@ -60,6 +60,7 @@ export default defineConfig({
             { label: 'Architecture', link: '/concepts/architecture/' },
             { label: 'Features', link: '/concepts/features/' },
             { label: 'Agent engine', link: '/concepts/agent-engine/' },
+            { label: 'Knowledge base (RAG)', link: '/concepts/knowledge-base/' },
             { label: 'Permission modes & approvals', link: '/concepts/permission-modes/' },
             { label: 'Autonomy & self-improvement', link: '/concepts/autonomy/' },
             { label: 'Sandboxing & threat model', link: '/concepts/sandboxing/' },
@@ -74,6 +75,7 @@ export default defineConfig({
             { label: 'Command reference', link: '/operations/commands/' },
             { label: 'World view', link: '/operations/world-view/' },
             { label: 'Command center', link: '/operations/command-center/' },
+            { label: 'Standing missions', link: '/operations/scheduler/' },
             { label: 'Map dashboard', link: '/operations/map-dashboard/' },
             { label: 'Demo', link: '/operations/demo/' },
           ],
@@ -81,6 +83,7 @@ export default defineConfig({
         {
           label: 'Reference',
           items: [
+            { label: 'OpenAI-compatible API', link: '/reference/openai-api/' },
             { label: 'Configuration reference', link: '/reference/configuration/' },
             { label: 'Hosts & images', link: '/reference/hosts-and-images/' },
             { label: 'Secrets (sops-nix)', link: '/reference/secrets/' },

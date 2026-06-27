@@ -85,6 +85,47 @@ hearth-dashboard --plain   # text fallback, no TUI
 
 Set `HEARTH_NO_DASHBOARD=1` to suppress the auto-launch on login.
 
+### `hearth-doctor`
+
+A one-command health check of the install. Probes Ollama, the audit database,
+disk, and services, prints a pass/warn/fail checklist, and exits non-zero on
+failure so it works in scripts and CI.
+
+```sh
+hearth-doctor
+```
+
+### `hearth-knowledge`
+
+Manage the local knowledge base: ingest a file under a source, search it, or list
+the sources you have ingested.
+
+```sh
+hearth-knowledge ingest <source> <file>
+hearth-knowledge search <query>
+hearth-knowledge sources
+```
+
+### `hearth-project`
+
+Index a directory into the knowledge base so an agent can search a codebase or
+document tree, then list what was indexed under a name.
+
+```sh
+hearth-project index <name> <path>
+hearth-project list <name>
+```
+
+### `hearth-schedule`
+
+The standing-missions scheduler. List the configured missions, or run one tick to
+launch any that are due.
+
+```sh
+hearth-schedule --list
+hearth-schedule --tick
+```
+
 ## Services
 
 Start these with `systemctl`; read their output with `journalctl`.
