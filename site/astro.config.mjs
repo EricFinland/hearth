@@ -62,6 +62,7 @@ export default defineConfig({
             { label: 'Agent engine', link: '/concepts/agent-engine/' },
             { label: 'Knowledge base (RAG)', link: '/concepts/knowledge-base/' },
             { label: 'Permission modes & approvals', link: '/concepts/permission-modes/' },
+            { label: 'Per-run containment', link: '/concepts/per-run-containment/' },
             { label: 'Autonomy & self-improvement', link: '/concepts/autonomy/' },
             { label: 'Sandboxing & threat model', link: '/concepts/sandboxing/' },
             { label: 'Observability & audit', link: '/concepts/observability/' },
