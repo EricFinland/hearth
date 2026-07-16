@@ -61,6 +61,13 @@
     background: rgba(95,208,255,0.08); border: 1px solid #16324f;
     padding: 2px 10px; border-radius: 10px;
   }
+  #savedCounter {
+    font-size: 11px; color: #6fcf7f;
+    background: rgba(111,207,127,0.08); border: 1px solid #1a4a2a;
+    padding: 2px 10px; border-radius: 10px;
+    transition: transform .3s ease;
+  }
+  #savedCounter.bump { transform: scale(1.15); }
   #navLink {
     font-size: 10px; color: #8a93a0; text-decoration: none;
     border: 1px solid #16324f; padding: 2px 8px; border-radius: 6px;
@@ -221,6 +228,7 @@
     <div class="hbar-text" id="ramText">--</div>
   </div>
   <div id="agentCount">0 agents</div>
+  <div id="savedCounter" title="what this facility's tokens would have cost on a frontier cloud model">$0 saved</div>
   <a id="navLink" href="/command">command</a>
 </div>
 <!-- launch bar bottom -->
@@ -1301,6 +1309,22 @@ async function fetchStats() {
   } catch(e) {}
 }
 
+// ---- cloud-cost-saved counter (HUD) ----
+let lastSaved = -1;
+async function fetchSaved() {
+  try {
+    const j = await (await fetch('/stats/history')).json();
+    const saved = (j.totals || {}).saved_usd || 0;
+    const el = document.getElementById('savedCounter');
+    el.textContent = '$' + saved.toLocaleString() + ' saved';
+    if (lastSaved >= 0 && saved > lastSaved) {
+      el.classList.add('bump');
+      setTimeout(() => el.classList.remove('bump'), 350);
+    }
+    lastSaved = saved;
+  } catch(e) {}
+}
+
 async function fetchTree() {
   try {
     const j = await (await fetch('/tree')).json();
@@ -1599,6 +1623,7 @@ fetchStats();
 fetchTree();
 fetchState();
 setInterval(fetchStats, 3000);
+setInterval(fetchSaved, 8000); fetchSaved();
 setInterval(() => { fetchTree(); fetchState(); }, 1500);
 </script>
 </body></html>

@@ -59,13 +59,21 @@ def _command_head(args):
     return cmd.split()[0] if cmd else ""
 
 
-def decide(mode, tool, args=None, auto_allow=()):
+def decide(mode, tool, args=None, auto_allow=(), allowed_tools=None):
     """Return 'allow' | 'gate' | 'deny' for (mode, tool, args).
 
     auto_allow is an optional collection of command heads (for example
     {'git', 'ls'}) that run automatically even in auto mode. Empty by default.
     auto_allow only applies to run_command command heads; it does not affect other dangerous tools such as http_request.
+
+    allowed_tools is the run's capability manifest: None means no manifest
+    (every registered tool is a candidate, mode logic decides); a collection
+    means the run is hard-capped to exactly those tools. A tool outside the
+    manifest is denied in EVERY mode, including bypass. An empty manifest
+    denies everything.
     """
+    if allowed_tools is not None and tool not in allowed_tools:
+        return "deny"  # the manifest is a hard cap, checked before mode logic
     if mode not in MODES:
         return "gate"  # invalid modes fail safe by gating
     risk = risk_of(tool)
@@ -130,6 +138,14 @@ def _self_test():
     assert risk_of("replace_in_files") == "edit" and risk_of("fetch_to_kb") == "dangerous"
     assert decide("auto", "replace_in_files") == "allow" and decide("auto", "fetch_to_kb") == "gate"
     assert decide("plan", "recall") == "allow"
+    # capability manifest: a hard cap in every mode, including bypass
+    assert decide("bypass", "run_command", allowed_tools={"read_file"}) == "deny"
+    assert decide("auto", "read_file", allowed_tools={"read_file"}) == "allow"
+    assert decide("auto", "write_file", allowed_tools={"read_file", "write_file"}) == "allow"
+    assert decide("plan", "write_file", allowed_tools={"write_file"}) == "deny"  # mode still applies inside the manifest
+    assert decide("bypass", "web_fetch", allowed_tools=set()) == "deny"  # empty manifest denies everything
+    assert decide("bypass", "web_fetch", allowed_tools=None) == "allow"  # None = no manifest (back-compat)
+    assert decide("auto", "run_command", {"command": "git status"}, auto_allow={"git"}, allowed_tools={"run_command"}) == "allow"
     print("hearth-permissions self-test OK")
     return 0
 

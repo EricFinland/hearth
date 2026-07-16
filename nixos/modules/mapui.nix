@@ -61,6 +61,9 @@ in
         Group = "users";
         Restart = "on-failure";
         EnvironmentFile = [ "-/var/lib/hearth/secrets/mapd.env" ];
+        # Lets /tools import the agent tool registry (agent/ is not packaged
+        # next to webui/ in the store).
+        Environment = [ "HEARTH_AGENT_DIR=${../../agent}" ];
         # Children invoke sudo; do not block privilege escalation.
         NoNewPrivileges = false;
       };

@@ -15,11 +15,13 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -260,6 +262,64 @@ def tool_edit_file(args, workspace):
     return "edited {}: {} replacement{}".format(args.get("path"), n, "s" if n != 1 else "")
 
 
+EGRESS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS egress_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT, ts TEXT, tool TEXT, host TEXT, url TEXT, allowed INTEGER
+);
+"""
+
+
+def _host_allowed(host):
+    """Check a hostname against the run's egress allowlist (HEARTH_ALLOWED_HOSTS,
+    comma-separated). Unset or empty means no allowlist: everything is allowed
+    (back-compat, same semantics as HEARTH_ALLOWED_CREDS). Loopback is always
+    allowed (Ollama and local APIs). An entry matches itself and its subdomains:
+    'github.com' allows both 'github.com' and 'api.github.com'."""
+    host = (host or "").lower().strip("[]")
+    if host in ("localhost", "::1") or host.startswith("127."):
+        return True
+    raw = os.environ.get("HEARTH_ALLOWED_HOSTS", "")
+    entries = [e.strip().lower() for e in raw.split(",") if e.strip()]
+    if not entries:
+        return True
+    return any(host == e or host.endswith("." + e) for e in entries)
+
+
+def _log_egress(tool, host, url, allowed):
+    """Record an outbound network attempt (allowed or blocked) to the audit db.
+    Best-effort: an unwritable db must never break the tool."""
+    db = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
+    agent_id = os.environ.get("HEARTH_AGENT_ID", "unknown")
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        try:
+            con.executescript(EGRESS_SCHEMA)
+            con.execute(
+                "INSERT INTO egress_log (agent_id, ts, tool, host, url, allowed) "
+                "VALUES (?,?,?,?,?,?)",
+                (agent_id, datetime.now(timezone.utc).isoformat(), tool,
+                 host, (url or "")[:500], 1 if allowed else 0))
+            con.commit()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        pass
+
+
+def _egress_check(url, tool):
+    """Gate an outbound request on the run's egress allowlist and log the
+    attempt. Returns None when allowed, or an error string the model can learn
+    from when blocked."""
+    host = (urllib.parse.urlparse(url or "").hostname or "").lower()
+    allowed = _host_allowed(host)
+    _log_egress(tool, host, url, allowed)
+    if allowed:
+        return None
+    return ("error: egress blocked: {} is not in this run's allowed hosts; "
+            "use an allowed host or finish without it".format(host or "?"))
+
+
 def _resolve_cred(name):
     """Read a stored credential by name from the systemd credentials directory.
     The credentials file is a simple `NAME=VALUE` per line. Returns "" if not
@@ -285,6 +345,9 @@ def tool_web_fetch(args, workspace):
     url = args.get("url")
     if not url:
         return "error: no url"
+    blocked = _egress_check(url, "web_fetch")
+    if blocked:
+        return blocked
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (hearth-agent)"})
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
@@ -336,6 +399,9 @@ def tool_web_search(args, workspace):
     if not query:
         return "error: no query"
     max_results = int(args.get("max_results") or 5)
+    blocked = _egress_check("https://html.duckduckgo.com/html/", "web_search")
+    if blocked:
+        return blocked + " (web_search needs duckduckgo.com in the allowlist)"
     # The DDG HTML endpoint serves results only for a POST with the query as form
     # data; a GET query string just returns the DDG home page.
     data = urllib.parse.urlencode({"q": query}).encode()
@@ -359,6 +425,9 @@ def tool_http_request(args, workspace):
     url = args.get("url")
     if not url:
         return "error: no url"
+    blocked = _egress_check(url, "http_request")
+    if blocked:
+        return blocked
     method = (args.get("method") or "GET").upper()
     headers = {k: (_resolve_cred(v[5:]) if isinstance(v, str) and v.startswith("cred:") else v)
                for k, v in (args.get("headers") or {}).items()}
@@ -861,11 +930,13 @@ TOOLS = [
 _BY_NAME = {t["name"]: t for t in TOOLS}
 
 
-def ollama_tool_specs():
-    """The tools in Ollama's chat tool format."""
+def ollama_tool_specs(allowed=None):
+    """The tools in Ollama's chat tool format. When allowed (a collection of tool
+    names, the run's capability manifest) is given, only those tools are
+    advertised so the model never sees what it cannot use."""
     return [{"type": "function", "function": {
         "name": t["name"], "description": t["description"], "parameters": t["parameters"]}}
-        for t in TOOLS]
+        for t in TOOLS if allowed is None or t["name"] in allowed]
 
 
 def execute_tool(name, args, workspace):
@@ -888,6 +959,10 @@ def _self_test():
     assert "hello" in out and "exit=0" in out, out
     assert "escapes workspace" in execute_tool("write_file", {"path": "../evil", "content": "x"}, ws)
     assert len(ollama_tool_specs()) == len(TOOLS)
+    # capability manifest filtering: only listed tools are advertised
+    caps = ollama_tool_specs(allowed={"read_file", "write_file"})
+    assert sorted(s["function"]["name"] for s in caps) == ["read_file", "write_file"], caps
+    assert ollama_tool_specs(allowed=set()) == []
     # list_tree shows the layout; search_files greps; edit_file does find/replace.
     execute_tool("write_file", {"path": "src/app.py", "content": "x = 1\nprint(x)\n"}, ws)
     tree = execute_tool("list_tree", {}, ws)
@@ -973,6 +1048,54 @@ def _self_test():
             os.environ.pop("HEARTH_ALLOWED_CREDS", None)
         else:
             os.environ["HEARTH_ALLOWED_CREDS"] = old_allow
+
+    # Egress allowlist: HEARTH_ALLOWED_HOSTS gates outbound tools; loopback is
+    # always allowed; attempts (allowed and blocked) land in egress_log.
+    import tempfile as _tfe2
+    _edb = os.path.join(_tfe2.mkdtemp(prefix="hearth-egress-"), "a.db")
+    _old_edb = os.environ.get("HEARTH_DB")
+    _old_hosts = os.environ.get("HEARTH_ALLOWED_HOSTS")
+    _old_aid = os.environ.get("HEARTH_AGENT_ID")
+    os.environ["HEARTH_DB"] = _edb
+    os.environ["HEARTH_AGENT_ID"] = "egress-test"
+    try:
+        os.environ.pop("HEARTH_ALLOWED_HOSTS", None)
+        assert _host_allowed("example.com"), "no allowlist: everything allowed"
+        os.environ["HEARTH_ALLOWED_HOSTS"] = "example.com, github.com"
+        assert _host_allowed("example.com"), "exact match"
+        assert _host_allowed("api.github.com"), "subdomain of an entry"
+        assert not _host_allowed("evil.com"), "unlisted host blocked"
+        assert not _host_allowed("notgithub.com"), "suffix must be a subdomain boundary"
+        assert _host_allowed("127.0.0.1") and _host_allowed("localhost"), "loopback always allowed"
+        # the check runs before any network I/O: a blocked host returns the
+        # egress error (never a DNS/network error) and logs a blocked row
+        out = tool_http_request({"url": "https://evil.com/x"}, ws)
+        assert out.startswith("error: egress blocked"), out
+        out2 = tool_web_fetch({"url": "https://evil.com/x"}, ws)
+        assert out2.startswith("error: egress blocked"), out2
+        os.environ["HEARTH_ALLOWED_HOSTS"] = "example.com"
+        outs = tool_web_search({"query": "x"}, ws)
+        assert "egress blocked" in outs and "duckduckgo" in outs, outs
+        con = sqlite3.connect(_edb)
+        rows = con.execute("SELECT tool, host, allowed FROM egress_log "
+                           "WHERE agent_id='egress-test' ORDER BY id").fetchall()
+        con.close()
+        assert ("http_request", "evil.com", 0) in rows, rows
+        assert ("web_fetch", "evil.com", 0) in rows, rows
+        assert ("web_search", "html.duckduckgo.com", 0) in rows, rows
+    finally:
+        if _old_edb is None:
+            os.environ.pop("HEARTH_DB", None)
+        else:
+            os.environ["HEARTH_DB"] = _old_edb
+        if _old_hosts is None:
+            os.environ.pop("HEARTH_ALLOWED_HOSTS", None)
+        else:
+            os.environ["HEARTH_ALLOWED_HOSTS"] = _old_hosts
+        if _old_aid is None:
+            os.environ.pop("HEARTH_AGENT_ID", None)
+        else:
+            os.environ["HEARTH_AGENT_ID"] = _old_aid
 
     # current_generation: parse the generation number, and confirm the tool
     # never crashes even where the system profile is absent (dev/non-NixOS).

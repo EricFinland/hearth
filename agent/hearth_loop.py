@@ -114,14 +114,18 @@ def _lenient_json(text):
             return None
 
 
-def parse_content_tool_calls(content):
+def parse_content_tool_calls(content, allowed=None):
     """Fallback: extract tool calls a model emitted as JSON text instead of using
     Ollama's structured tool_calls field (common with local models). Scans the
     content for JSON objects that name a known tool and returns a list of
-    {name, arguments} dicts. Tolerates trailing-comma JSON."""
+    {name, arguments} dicts. Tolerates trailing-comma JSON. When allowed (the
+    run's capability manifest) is given, only manifest tools are recognized, so
+    a text-emitted call can never reach a tool the run was not granted."""
     if not content:
         return []
     known = {t["name"] for t in hearth_tools.TOOLS}
+    if allowed is not None:
+        known &= set(allowed)
     decoder = json.JSONDecoder()
     calls = []
     i = 0
@@ -184,6 +188,15 @@ def _stdin_control(_request):
         return {}
 
 
+def _env_manifest():
+    """Parse the run's capability manifest from HEARTH_ALLOWED_TOOLS
+    (comma-separated tool names). Unset or empty means no manifest (None):
+    every registered tool is available, subject to the permission mode."""
+    raw = os.environ.get("HEARTH_ALLOWED_TOOLS", "")
+    names = frozenset(x.strip() for x in raw.split(",") if x.strip())
+    return names or None
+
+
 def _system_for(mode):
     base = SYSTEM_PROMPT
     if mode == "plan":
@@ -193,7 +206,8 @@ def _system_for(mode):
     return base
 
 
-def _await_decision(req_id, tool, cargs, auto_allow, control, state, emit, agent_name, db):
+def _await_decision(req_id, tool, cargs, auto_allow, control, state, emit, agent_name, db,
+                    allowed_tools=None):
     """Block until a decision for req_id arrives. Handle set_mode and stop while
     waiting; if a mode switch would now allow this tool, proceed. Returns
     True (allow), False (deny), or None (stop)."""
@@ -207,7 +221,8 @@ def _await_decision(req_id, tool, cargs, auto_allow, control, state, emit, agent
             if new in permissions.MODES:
                 state["mode"] = new
                 _emit(agent_name, "THINKING", "mode -> " + new, db)
-                if permissions.decide(new, tool, cargs, auto_allow) == "allow":
+                if permissions.decide(new, tool, cargs, auto_allow,
+                                      allowed_tools=allowed_tools) == "allow":
                     return True
                 # still gated under the new mode: stay parked, re-advertise so the UI
                 # keeps showing the pending request rather than a stale THINKING.
@@ -224,9 +239,10 @@ def _await_decision(req_id, tool, cargs, auto_allow, control, state, emit, agent
 
 
 def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
-               db, agent_name, max_iters, auto_allow):
+               db, agent_name, max_iters, auto_allow, allowed_tools=None):
     """Run agent turns until the model stops calling tools, hits the cap, or is
-    stopped. state is a mutable dict holding {"mode": ...}. Returns
+    stopped. state is a mutable dict holding {"mode": ...}. allowed_tools is the
+    run's capability manifest (None = no manifest). Returns
     (final_text, error, tokens_out)."""
     tokens_out = 0
     final = ""
@@ -241,7 +257,7 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             emit({"type": "message", "role": "assistant", "content": content})
         calls = msg.get("tool_calls") or []
         if not calls:
-            parsed = parse_content_tool_calls(content)
+            parsed = parse_content_tool_calls(content, allowed=allowed_tools)
             if parsed:
                 calls = [{"function": c} for c in parsed]
             else:
@@ -263,10 +279,15 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
                     cargs = {}
             else:
                 cargs = {}
-            verdict = permissions.decide(state["mode"], name, cargs, auto_allow)
+            verdict = permissions.decide(state["mode"], name, cargs, auto_allow,
+                                         allowed_tools=allowed_tools)
             if verdict == "deny":
-                result = "denied: permission mode '{}' does not allow {}".format(
-                    state["mode"], name)
+                if allowed_tools is not None and name not in allowed_tools:
+                    result = ("denied: {} is not in this run's capability manifest; "
+                              "use only the tools you were given".format(name))
+                else:
+                    result = "denied: permission mode '{}' does not allow {}".format(
+                        state["mode"], name)
                 emit({"type": "tool_result", "tool": name, "denied": True, "output": result})
                 messages.append({"role": "tool", "content": result})
                 continue
@@ -277,7 +298,8 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
                 emit({"type": "state", "state": "WAITING_APPROVAL", "detail": name})
                 _emit(agent_name, "WAITING_APPROVAL", name, db)
                 allowed = _await_decision(req_id, name, cargs, auto_allow, control,
-                                          state, emit, agent_name, db)
+                                          state, emit, agent_name, db,
+                                          allowed_tools=allowed_tools)
                 if allowed is None:
                     return final, "stopped by user", tokens_out
                 if not allowed:
@@ -376,13 +398,19 @@ def _recalled_context(db, goal, kb_limit=3, mem_limit=3):
 
 def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
              ollama_url=DEFAULT_OLLAMA, max_iters=MAX_ITERS, chat_fn=None,
-             mode="auto", auto_allow=(), emit_fn=None, control_fn=None, recall=True):
+             mode="auto", auto_allow=(), emit_fn=None, control_fn=None, recall=True,
+             allowed_tools=None):
     """Drive a one-shot agent run. chat_fn/emit_fn/control_fn are injectable for
     testing; by default the loop talks Ollama and reads/writes the JSON protocol
-    on stdin/stdout."""
-    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs, hearth_tools.ollama_tool_specs()))
+    on stdin/stdout. allowed_tools is the run's capability manifest; when None it
+    falls back to HEARTH_ALLOWED_TOOLS from the environment (the spawn path)."""
+    if allowed_tools is None:
+        allowed_tools = _env_manifest()
+    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs,
+                                            hearth_tools.ollama_tool_specs(allowed_tools)))
     emit = emit_fn or _stdout_emit
     control = control_fn or _stdin_control
+    os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
     os.makedirs(workspace, exist_ok=True)
     messages = [{"role": "system", "content": _system_for(mode)}]
     if recall:
@@ -398,7 +426,7 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
     t0 = time.monotonic()
     final, error, tokens_out = _run_turns(messages, model, workspace, chat_fn, emit,
                                           control, state, db, agent_name, max_iters,
-                                          auto_allow)
+                                          auto_allow, allowed_tools=allowed_tools)
     latency_ms = int((time.monotonic() - t0) * 1000)
     _record(db, agent_name, model, tokens_out, latency_ms, error)
     _emit(agent_name, "ERRORED" if error else "DONE", error or "task complete", db)
@@ -408,13 +436,18 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
 
 def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
                 ollama_url=DEFAULT_OLLAMA, max_iters=MAX_ITERS, chat_fn=None,
-                mode="auto", auto_allow=(), emit_fn=None, control_fn=None):
+                mode="auto", auto_allow=(), emit_fn=None, control_fn=None,
+                allowed_tools=None):
     """Long-lived interactive session. Reads user_message / set_mode / stop from
     the control channel, runs agent turns per user_message, and streams events.
     Ends on stop or EOF. Conversation context persists across messages."""
-    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs, hearth_tools.ollama_tool_specs()))
+    if allowed_tools is None:
+        allowed_tools = _env_manifest()
+    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs,
+                                            hearth_tools.ollama_tool_specs(allowed_tools)))
     emit = emit_fn or _stdout_emit
     control = control_fn or _stdin_control
+    os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
     os.makedirs(workspace, exist_ok=True)
     state = {"mode": mode}
     messages = [{"role": "system", "content": _system_for(mode)}]
@@ -438,7 +471,7 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
         t0 = time.monotonic()
         final, error, tokens_out = _run_turns(messages, model, workspace, chat_fn, emit,
                                                control, state, db, agent_name, max_iters,
-                                               auto_allow)
+                                               auto_allow, allowed_tools=allowed_tools)
         latency_ms = int((time.monotonic() - t0) * 1000)
         _record(db, agent_name, model, tokens_out, latency_ms, error)
         emit({"type": "turn_done", "error": error, "final": final})
@@ -581,6 +614,56 @@ def _self_test():
     assert not os.path.exists(os.path.join(wsp, "x.txt")), "plan mode must not write"
     assert ep is None, ep
 
+    # --- Capability manifest: a tool outside the manifest is denied even in
+    # bypass mode, and a text-emitted call to it is not recognized at all.
+    events_m = []
+    chat_steps_m = [
+        ({"role": "assistant", "tool_calls": [{"function": {"name": "run_command",
+            "arguments": {"command": "echo nope"}}}]}, 1),
+        ({"role": "assistant", "content": "ok"}, 1),
+    ]
+    mseq = iter(chat_steps_m)
+    wsm = tempfile.mkdtemp(prefix="hearth-loopM-")
+    fm, em = run_loop("try shell", "mock", wsm, db=os.path.join(wsm, "d.db"),
+                      agent_name="tm", mode="bypass",
+                      chat_fn=lambda m: next(mseq),
+                      emit_fn=events_m.append,
+                      control_fn=lambda req: {"type": "stop"},
+                      allowed_tools=frozenset({"read_file", "write_file"}))
+    mdenials = [e for e in events_m if e["type"] == "tool_result" and e.get("denied")]
+    assert mdenials and "capability manifest" in mdenials[0]["output"], events_m
+    assert em is None, em
+    # a manifest tool still works inside the manifest
+    events_m2 = []
+    chat_steps_m2 = [
+        ({"role": "assistant", "tool_calls": [{"function": {"name": "write_file",
+            "arguments": {"path": "ok.txt", "content": "in-manifest"}}}]}, 1),
+        ({"role": "assistant", "content": "done"}, 1),
+    ]
+    m2seq = iter(chat_steps_m2)
+    fm2, em2 = run_loop("write", "mock", wsm, db=os.path.join(wsm, "d.db"),
+                        agent_name="tm2", mode="bypass",
+                        chat_fn=lambda m: next(m2seq),
+                        emit_fn=events_m2.append,
+                        control_fn=lambda req: {"type": "stop"},
+                        allowed_tools=frozenset({"read_file", "write_file"}))
+    assert em2 is None, em2
+    with open(os.path.join(wsm, "ok.txt")) as fh:
+        assert fh.read() == "in-manifest"
+    # text-emitted calls: outside the manifest -> not recognized; inside -> parsed
+    assert parse_content_tool_calls('{"name":"run_command","arguments":{"command":"x"}}',
+                                    allowed={"read_file"}) == []
+    assert parse_content_tool_calls('{"name":"read_file","arguments":{"path":"a"}}',
+                                    allowed={"read_file"}) == [
+        {"name": "read_file", "arguments": {"path": "a"}}]
+    # env fallback: HEARTH_ALLOWED_TOOLS shapes the manifest when no param given
+    os.environ["HEARTH_ALLOWED_TOOLS"] = "read_file, kb_search"
+    try:
+        assert _env_manifest() == frozenset({"read_file", "kb_search"})
+    finally:
+        os.environ.pop("HEARTH_ALLOWED_TOOLS", None)
+    assert _env_manifest() is None
+
     # --- Session: a user_message drives a turn, then stop ends the session.
     events_s = []
     sess_chat = iter([({"role": "assistant", "content": "hello back"}, 1)])
@@ -658,6 +741,9 @@ def main(argv=None):
                    help="event/control transport: stdio (interactive) or db (background worker)")
     p.add_argument("--auto-allow", default="",
                    help="comma-separated command heads always allowed in auto mode")
+    p.add_argument("--allowed-tools", default="",
+                   help="comma-separated capability manifest: the run may use ONLY "
+                        "these tools, in every mode (falls back to HEARTH_ALLOWED_TOOLS)")
     p.add_argument("--session", action="store_true",
                    help="run a long-lived interactive session (reads JSON commands "
                         "from stdin, writes JSON events to stdout)")
@@ -678,6 +764,7 @@ def main(argv=None):
     if a.self_test:
         return _self_test()
     auto_allow = tuple(x for x in a.auto_allow.split(",") if x)
+    allowed_tools = frozenset(x.strip() for x in a.allowed_tools.split(",") if x.strip()) or None
     emit_fn = control_fn = None
     if a.io == "db":
         emit_fn, control_fn = make_db_transport(a.db, a.agent_name)
@@ -718,14 +805,16 @@ def main(argv=None):
     if a.session:
         run_session(a.model, a.workspace, db=a.db, agent_name=a.agent_name,
                     ollama_url=a.ollama_url, max_iters=a.max_iters, mode=a.mode,
-                    auto_allow=auto_allow, emit_fn=emit_fn, control_fn=control_fn)
+                    auto_allow=auto_allow, emit_fn=emit_fn, control_fn=control_fn,
+                    allowed_tools=allowed_tools)
         return 0
     if not a.goal:
         p.error("a goal is required unless --self-test or --session")
     final, error = run_loop(a.goal, a.model, a.workspace, db=a.db,
                             agent_name=a.agent_name, ollama_url=a.ollama_url,
                             max_iters=a.max_iters, mode=a.mode, auto_allow=auto_allow,
-                            emit_fn=emit_fn, control_fn=control_fn)
+                            emit_fn=emit_fn, control_fn=control_fn,
+                            allowed_tools=allowed_tools)
     if error:
         print("hearth-loop error:", error, file=sys.stderr)
         return 1

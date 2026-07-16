@@ -64,6 +64,8 @@
       <option value="bypass">bypass (no prompts)</option>
     </select>
     <input id="agCreds" placeholder="allowed creds (optional, comma-separated)" style="width:100%;margin-bottom:4px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;box-sizing:border-box;" />
+    <input id="agTools" placeholder="allowed tools (optional, e.g. read_file,web_fetch)" title="capability manifest: the run may use ONLY these tools, even in bypass" style="width:100%;margin-bottom:4px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;box-sizing:border-box;" />
+    <input id="agHosts" placeholder="allowed hosts (optional, e.g. github.com,nixos.org)" title="egress allowlist: web tools may reach ONLY these hosts (loopback always allowed)" style="width:100%;margin-bottom:4px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;box-sizing:border-box;" />
     <textarea id="agTask" placeholder="task for the agent..." style="width:100%;height:60px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;box-sizing:border-box;"></textarea>
     <div style="display:flex;gap:6px;margin-top:4px;">
       <button id="agSession" style="flex:1;background:#1c6;color:#04150c;border:0;border-radius:6px;padding:6px 12px;cursor:pointer;">open session</button>
@@ -103,6 +105,10 @@
   <div class="card" id="statsHist" style="grid-column:1/3;">
     <div class="title">usage over time</div>
     <div id="statsHistBody" style="font-size:12px;">loading...</div>
+  </div>
+  <div class="card" id="security" style="grid-column:1/3;">
+    <div class="title">security</div>
+    <div id="securityBody" style="font-size:12px;">loading...</div>
   </div>
   <div class="card" id="sched" style="grid-column:1/3;">
     <div class="title">standing missions</div>
@@ -171,6 +177,13 @@ document.getElementById("chatInput").addEventListener("keydown",e=>{if(e.key==="
 async function loadAgModels(){try{const j=await(await fetch("/models")).json();
   document.getElementById("agModel").innerHTML=(j.models||[]).map(n=>`<option>${n}</option>`).join("")||"<option>llama3.2:3b</option>";}catch(e){}}
 loadAgModels();
+// per-run scoping shared by every launch path: credential allowlist, capability
+// manifest (tools), and egress allowlist (hosts). Empty fields stay unrestricted.
+function scope(){
+  return {creds:document.getElementById("agCreds").value.trim(),
+          tools:document.getElementById("agTools").value.trim(),
+          allowed_hosts:document.getElementById("agHosts").value.trim()};
+}
 document.getElementById("agLaunch").onclick=async()=>{
   const name=document.getElementById("agName").value.trim()||"agent";
   const model=document.getElementById("agModel").value;
@@ -179,8 +192,7 @@ document.getElementById("agLaunch").onclick=async()=>{
   if(!prompt){msg.textContent="enter a task";return;}
   msg.textContent="launching...";
   const mode=document.getElementById("agMode").value;
-  const creds=document.getElementById("agCreds").value.trim();
-  try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,model,prompt,mode,creds})});
+  try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,model,prompt,mode,...scope()})});
     const j=await r.json();
     if(j.queued){msg.textContent="launched "+j.queued+" (watch the map)";document.getElementById("agTask").value="";}
     else msg.textContent="error: "+(j.error||"unknown");}
@@ -243,7 +255,7 @@ sessEl("agSession").onclick=async()=>{
   const task=sessEl("agTask").value.trim();
   sessEl("agMsg").textContent="opening session...";
   try{const r=await fetch("/session",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({name,model,mode,task,creds:sessEl("agCreds").value.trim()})});
+      body:JSON.stringify({name,model,mode,task,...scope()})});
     const j=await r.json();
     if(j.id){sessEl("agMsg").textContent="session open"; sessEl("agTask").value=""; openSession(j.id,j.mode);}
     else sessEl("agMsg").textContent="error: "+(j.error||"unknown");
@@ -310,7 +322,7 @@ document.getElementById("agMission").onclick=async()=>{
   if(!prompt){msg.textContent="enter a goal";return;}
   msg.textContent="launching mission...";
   try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({name,model,prompt,mode:"bypass",swarm:true})});
+      body:JSON.stringify({name,model,prompt,mode:"bypass",swarm:true,...scope()})});
     const j=await r.json();
     if(j.queued){msg.textContent="mission launched: "+j.queued+" (watch missions)";document.getElementById("agTask").value="";}
     else msg.textContent="error: "+(j.error||"unknown");
@@ -323,7 +335,7 @@ document.getElementById("agMarathon").onclick=async()=>{
   if(!prompt){msg.textContent="enter a goal";return;}
   msg.textContent="starting marathon...";
   try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({name,model,prompt,mode:"bypass",marathon:true,checkin:true})});
+      body:JSON.stringify({name,model,prompt,mode:"bypass",marathon:true,checkin:true,...scope()})});
     const j=await r.json();
     if(j.queued){msg.textContent="marathon running: "+j.queued+" (it will DM you on Telegram if configured)";document.getElementById("agTask").value="";}
     else msg.textContent="error: "+(j.error||"unknown");
@@ -336,7 +348,7 @@ document.getElementById("agEvolve").onclick=async()=>{
   if(!prompt){msg.textContent="describe the change to make to hearth itself";return;}
   msg.textContent="self-evolving (will validate with nix flake check)...";
   try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({name,model,prompt,mode:"bypass",evolve:true})});
+      body:JSON.stringify({name,model,prompt,mode:"bypass",evolve:true,...scope()})});
     const j=await r.json();
     if(j.queued){msg.textContent="self-evolve running: "+j.queued+" (it will branch + validate, never auto-deploy)";document.getElementById("agTask").value="";}
     else msg.textContent="error: "+(j.error||"unknown");
@@ -348,7 +360,7 @@ document.getElementById("agGrow").onclick=async()=>{
   const msg=document.getElementById("agMsg");
   msg.textContent="growth loop starting (hearth improves itself; each idea is branched + validated, never auto-deployed)...";
   try{const r=await fetch("/run",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({name,model,mode:"bypass",grow:true})});
+      body:JSON.stringify({name,model,mode:"bypass",grow:true,...scope()})});
     const j=await r.json();
     if(j.queued)msg.textContent="growth loop running: "+j.queued+" (validated branches will appear for review)";
     else msg.textContent="error: "+(j.error||"unknown");
@@ -368,12 +380,31 @@ async function refreshStatsHist(){
         <small style="color:#8a93a0;font-size:8px;">${esc(d.day.slice(5))}</small></div>`;}).join("");
     const models=(s.by_model||[]).map(m=>`<div style="color:#9fb6cc;">${esc(m.model)}: ${m.runs} runs, ${m.tokens} tok</div>`).join("");
     document.getElementById("statsHistBody").innerHTML=
-      `<div style="color:#cfe6ff;margin-bottom:6px;">${t.runs||0} runs total &middot; ${(t.tokens||0).toLocaleString()} tokens &middot; ${t.errors||0} errored</div>
+      `<div style="color:#cfe6ff;margin-bottom:6px;">${t.runs||0} runs total &middot; ${(t.tokens||0).toLocaleString()} tokens &middot; ${t.errors||0} errored
+        &middot; <b style="color:#6fcf7f">$${(t.saved_usd||0).toLocaleString()} saved vs cloud</b></div>
        <div style="display:flex;align-items:flex-end;gap:0;min-height:54px;overflow-x:auto;">${bars||"<small style='color:#8a93a0'>no runs yet</small>"}</div>
        <div style="margin-top:8px;font-size:11px;">${models}</div>`;
   }catch(e){}
 }
 setInterval(refreshStatsHist,5000); refreshStatsHist();
+
+// ---- security scoreboard ----
+async function refreshSecurity(){
+  try{
+    const s=await(await fetch("/security")).json();
+    const dot=ok=>`<span style="color:${ok?"#6fcf7f":"#e06a6a"}">${ok?"&#9679;":"&#9675;"}</span>`;
+    const chip=(label,ok,detail)=>`<span style="display:inline-block;border:1px solid ${ok?"#1a4a2a":"#5a2a2a"};border-radius:6px;padding:3px 9px;margin:2px 4px 2px 0;">${dot(ok)} ${label}${detail?` <small style="color:#8a93a0">${detail}</small>`:""}</span>`;
+    const d=s.daemons||{}, eg=s.egress||{}, tw=s.tripwires||{};
+    document.getElementById("securityBody").innerHTML=
+      chip("remote auth",s.remote_auth,s.remote_auth?"token required":"localhost only")+
+      chip("rate limit",true,(s.rate_limit_per_min||0)+"/min")+
+      chip("capability manifests",s.manifests_supported,"per-run tool caps")+
+      chip("egress log",true,`${eg.logged||0} logged, <b style="color:${eg.blocked?"#e06a6a":"#8a93a0"}">${eg.blocked||0} blocked</b>`)+
+      chip("tripwires",tw.armed,tw.armed?((tw.trips||0)+" trips"):"not armed yet")+
+      Object.entries(d).map(([u,ok])=>chip(u.replace("hearth-","").replace(".service","").replace(".timer"," timer"),ok,ok?"active":"down")).join("");
+  }catch(e){}
+}
+setInterval(refreshSecurity,7000); refreshSecurity();
 
 // ---- standing missions (scheduler) ----
 async function refreshSched(){

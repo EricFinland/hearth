@@ -305,10 +305,22 @@ def read_runs(db, limit=20):
         return []
 
 
+# What the same tokens would have cost on a frontier cloud model, blended
+# input+output, in dollars per million tokens. Deliberately a round conservative
+# figure; it powers the "cloud cost saved" counter, not billing.
+CLOUD_PRICE_PER_MTOK = float(os.environ.get("HEARTH_CLOUD_PRICE_MTOK", "15.0"))
+
+
+def cloud_saved_usd(tokens):
+    """Estimate what `tokens` would have cost on a frontier cloud model."""
+    return round((tokens or 0) / 1_000_000.0 * CLOUD_PRICE_PER_MTOK, 2)
+
+
 def read_stats_history(db, days=14):
     """Aggregate the audit log over time: runs/tokens/cost per day, per model, and
     grand totals. Powers the cockpit stats view."""
-    empty = {"by_day": [], "by_model": [], "totals": {"runs": 0, "tokens": 0, "cost": 0, "errors": 0}}
+    empty = {"by_day": [], "by_model": [],
+             "totals": {"runs": 0, "tokens": 0, "cost": 0, "errors": 0, "saved_usd": 0.0}}
     if not os.path.exists(db):
         return empty
     try:
@@ -329,11 +341,102 @@ def read_stats_history(db, days=14):
     except sqlite3.Error:
         return empty
     return {
-        "by_day": [{"day": r[0], "runs": r[1], "tokens": r[2], "cost": round(r[3] or 0, 4)}
+        "by_day": [{"day": r[0], "runs": r[1], "tokens": r[2], "cost": round(r[3] or 0, 4),
+                    "saved_usd": cloud_saved_usd(r[2])}
                    for r in reversed(by_day)],
         "by_model": [{"model": r[0], "runs": r[1], "tokens": r[2]} for r in by_model],
-        "totals": {"runs": tot[0], "tokens": tot[1], "cost": round(tot[2] or 0, 4), "errors": tot[3]},
+        "totals": {"runs": tot[0], "tokens": tot[1], "cost": round(tot[2] or 0, 4), "errors": tot[3],
+                   "saved_usd": cloud_saved_usd(tot[1])},
     }
+
+
+def read_egress(db, agent="", limit=200):
+    """Read the egress log (outbound network attempts recorded by the agent
+    tools), newest first, optionally for one agent."""
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        if agent:
+            cur = con.execute(
+                "SELECT agent_id, ts, tool, host, url, allowed FROM egress_log "
+                "WHERE agent_id=? ORDER BY id DESC LIMIT ?", (agent, limit))
+        else:
+            cur = con.execute(
+                "SELECT agent_id, ts, tool, host, url, allowed FROM egress_log "
+                "ORDER BY id DESC LIMIT ?", (limit,))
+        rows = [{"agent": r[0], "ts": r[1], "tool": r[2], "host": r[3],
+                 "url": r[4], "allowed": bool(r[5])} for r in cur.fetchall()]
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
+def _table_exists(con, name):
+    try:
+        return con.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+def read_security(db, is_active_fn=None):
+    """One security scoreboard for the cockpit: what containment is active on
+    this box right now, plus egress/tripwire activity counts."""
+    if is_active_fn is None:
+        def is_active_fn(u):
+            try:
+                r = subprocess.run([SYSTEMCTL, "is-active", u], capture_output=True, text=True, timeout=6)
+                return (r.stdout or "").strip() == "active"
+            except (OSError, subprocess.SubprocessError):
+                return False
+    egress_total = egress_blocked = 0
+    tripwires_armed = False
+    tripwire_count = 0
+    if os.path.exists(db):
+        try:
+            con = sqlite3.connect(db, timeout=10)
+            if _table_exists(con, "egress_log"):
+                row = con.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(CASE WHEN allowed=0 THEN 1 ELSE 0 END),0) "
+                    "FROM egress_log").fetchone()
+                egress_total, egress_blocked = row[0], row[1]
+            if _table_exists(con, "tripwires"):
+                tripwires_armed = True
+                tripwire_count = con.execute("SELECT COUNT(*) FROM tripwires").fetchone()[0]
+            con.close()
+        except sqlite3.Error:
+            pass
+    return {
+        "remote_auth": bool(API_TOKEN),
+        "rate_limit_per_min": RATE_LIMIT,
+        "manifests_supported": True,
+        "egress": {"logged": egress_total, "blocked": egress_blocked},
+        "tripwires": {"armed": tripwires_armed, "trips": tripwire_count},
+        "daemons": {u: is_active_fn(u) for u in
+                    ("hearth-mapd.service", "hearth-grow.service", "hearth-schedule.timer")},
+    }
+
+
+def read_tools():
+    """The agent tool registry for the cockpit launch panel: [{name, description,
+    risk}]. The agent modules live in a sibling dir in the repo, or wherever
+    HEARTH_AGENT_DIR points on a deployed box; when neither is importable this
+    returns [] and the cockpit falls back to a plain text field."""
+    import sys as _sys
+    candidates = [os.environ.get("HEARTH_AGENT_DIR", ""),
+                  os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent")]
+    for d in candidates:
+        if d and os.path.isdir(d) and d not in _sys.path:
+            _sys.path.insert(0, d)
+    try:
+        import hearth_tools as _ht
+        import permissions as _pm
+        return [{"name": t["name"], "description": t["description"],
+                 "risk": _pm.risk_of(t["name"])} for t in _ht.TOOLS]
+    except Exception:  # noqa: BLE001 - the registry is a nicety, never a crash
+        return []
 
 
 def _prom_label(v):
@@ -876,17 +979,32 @@ SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
 
 
-def spawn_session(loop_cmd, sid, model, mode, workspace, db, ollama_url, allowed_creds=""):
+def _session_env(allowed_creds="", allowed_tools="", allowed_hosts=""):
+    """Build the child environment for a session: the mapd env plus the run's
+    per-run scoping (credential allowlist, capability manifest, egress
+    allowlist). Empty values set nothing (unrestricted, back-compat)."""
+    env = dict(os.environ)
+    if allowed_creds:
+        env["HEARTH_ALLOWED_CREDS"] = allowed_creds
+    if allowed_tools:
+        env["HEARTH_ALLOWED_TOOLS"] = allowed_tools
+    if allowed_hosts:
+        env["HEARTH_ALLOWED_HOSTS"] = allowed_hosts
+    return env
+
+
+def spawn_session(loop_cmd, sid, model, mode, workspace, db, ollama_url, allowed_creds="",
+                  allowed_tools="", allowed_hosts=""):
     """Start a hearth-loop --session child and wrap it in a Session. The caller
     registers the returned Session in SESSIONS. allowed_creds (comma-separated)
-    scopes which stored credentials the agent may read; empty means all."""
+    scopes which stored credentials the agent may read; allowed_tools is the
+    run's capability manifest; allowed_hosts its egress allowlist. Empty means
+    unrestricted (back-compat)."""
     os.makedirs(workspace, exist_ok=True)
     args = [loop_cmd, "--session", "--model", model, "--mode", mode,
             "--agent-name", sid, "--workspace", workspace, "--db", db,
             "--ollama-url", ollama_url]
-    env = dict(os.environ)
-    if allowed_creds:
-        env["HEARTH_ALLOWED_CREDS"] = allowed_creds
+    env = _session_env(allowed_creds, allowed_tools, allowed_hosts)
     proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
     return Session(sid, proc)
@@ -961,6 +1079,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"missions": read_schedule()}), "application/json")
         if path == "/stats/history":
             return self._send(200, json.dumps(read_stats_history(self.db)), "application/json")
+        if path == "/tools":
+            return self._send(200, json.dumps({"tools": read_tools()}), "application/json")
+        if path == "/egress":
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            agent = (qs.get("agent") or [""])[0]
+            return self._send(200, json.dumps({"egress": read_egress(self.db, agent)}),
+                              "application/json")
+        if path == "/security":
+            return self._send(200, json.dumps(read_security(self.db)), "application/json")
         if path == "/metrics":
             return self._send(200, prometheus_metrics(self.db), "text/plain; version=0.0.4; charset=utf-8")
         parts = path.strip("/").split("/")
@@ -1106,6 +1233,10 @@ class Handler(BaseHTTPRequestHandler):
             mode = "bypass"
         creds = req.get("creds")
         allowed = ",".join(creds) if isinstance(creds, list) else (creds or "")
+        tools = req.get("tools")
+        tools = ",".join(tools) if isinstance(tools, list) else (tools or "")
+        hosts = req.get("allowed_hosts")
+        hosts = ",".join(hosts) if isinstance(hosts, list) else (hosts or "")
         swarm = bool(req.get("swarm"))
         marathon = bool(req.get("marathon"))
         checkin = bool(req.get("checkin"))
@@ -1122,7 +1253,8 @@ class Handler(BaseHTTPRequestHandler):
             final = os.path.join(queue_dir, run_id + ".json")
             with open(tmp, "w") as fh:
                 json.dump({"name": name, "model": model, "prompt": prompt,
-                           "mode": mode, "creds": allowed, "swarm": swarm,
+                           "mode": mode, "creds": allowed, "tools": tools,
+                           "allowed_hosts": hosts, "swarm": swarm,
                            "marathon": marathon, "checkin": checkin,
                            "evolve": evolve, "grow": grow}, fh)
             os.replace(tmp, final)
@@ -1141,6 +1273,10 @@ class Handler(BaseHTTPRequestHandler):
         task = req.get("task") or ""
         creds = req.get("creds")
         allowed = ",".join(creds) if isinstance(creds, list) else (creds or "")
+        tools = req.get("tools")
+        tools = ",".join(tools) if isinstance(tools, list) else (tools or "")
+        hosts = req.get("allowed_hosts")
+        hosts = ",".join(hosts) if isinstance(hosts, list) else (hosts or "")
         sid = "{}-{}".format(name, uuid.uuid4().hex[:8])
         workspace = "/var/lib/hearth/agents/" + sid
         with SESSIONS_LOCK:
@@ -1154,7 +1290,8 @@ class Handler(BaseHTTPRequestHandler):
                               "application/json")
         try:
             sess = spawn_session(self.loop_cmd, sid, model, mode, workspace,
-                                 self.db, self.ollama_url, allowed_creds=allowed)
+                                 self.db, self.ollama_url, allowed_creds=allowed,
+                                 allowed_tools=tools, allowed_hosts=hosts)
         except OSError as exc:
             return self._send(500, json.dumps({"error": str(exc)}), "application/json")
         with SESSIONS_LOCK:
@@ -1370,6 +1507,58 @@ def _self_test():
     assert rate_allow("1.2.3.4", 100.1, store, limit=3, window=60) is False, "4th in window blocked"
     assert rate_allow("9.9.9.9", 100.1, store, limit=3, window=60) is True, "other ip independent"
     assert rate_allow("1.2.3.4", 200.0, store, limit=3, window=60) is True, "old hits expired -> allowed"
+
+    # cloud-cost-saved: the counter derives from total tokens at the blended rate,
+    # and rides along in /stats/history day rows and totals.
+    assert cloud_saved_usd(1_000_000) == round(CLOUD_PRICE_PER_MTOK, 2)
+    assert cloud_saved_usd(0) == 0.0 and cloud_saved_usd(None) == 0.0
+    sdb = os.path.join(tempfile.mkdtemp(prefix="hearth-saved-"), "s.db")
+    con = sqlite3.connect(sdb)
+    con.executescript(SCHEMA)
+    con.execute("INSERT INTO agent_runs (agent_name, run_id, started_at, finished_at, "
+                "tokens_in, tokens_out, cost_usd, latency_ms, error, model) "
+                "VALUES ('a','r1','2026-07-15T00:00:00','2026-07-15T00:00:01',0,2000000,0,5,NULL,'m')")
+    con.commit(); con.close()
+    hist = read_stats_history(sdb)
+    assert hist["totals"]["saved_usd"] == cloud_saved_usd(2_000_000), hist["totals"]
+    assert hist["by_day"][0]["saved_usd"] == cloud_saved_usd(2_000_000), hist["by_day"]
+
+    # egress log reader + the security scoreboard aggregation
+    con = sqlite3.connect(sdb)
+    con.execute("CREATE TABLE IF NOT EXISTS egress_log (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "agent_id TEXT, ts TEXT, tool TEXT, host TEXT, url TEXT, allowed INTEGER)")
+    con.execute("INSERT INTO egress_log (agent_id, ts, tool, host, url, allowed) "
+                "VALUES ('w1', ?, 'web_fetch', 'evil.com', 'https://evil.com/x', 0)", (_now_iso(),))
+    con.execute("INSERT INTO egress_log (agent_id, ts, tool, host, url, allowed) "
+                "VALUES ('w1', ?, 'http_request', 'api.github.com', 'https://api.github.com', 1)", (_now_iso(),))
+    con.commit(); con.close()
+    eg = read_egress(sdb)
+    assert len(eg) == 2 and eg[0]["host"] == "api.github.com", eg  # newest first
+    assert read_egress(sdb, agent="nobody") == []
+    blocked = [e for e in eg if not e["allowed"]]
+    assert blocked and blocked[0]["host"] == "evil.com", eg
+    sec = read_security(sdb, is_active_fn=lambda u: u == "hearth-mapd.service")
+    assert sec["egress"] == {"logged": 2, "blocked": 1}, sec
+    assert sec["tripwires"] == {"armed": False, "trips": 0}, sec  # armed in v1.2
+    assert sec["daemons"]["hearth-mapd.service"] is True and sec["daemons"]["hearth-grow.service"] is False, sec
+    assert sec["manifests_supported"] is True
+
+    # /tools registry: importable in the repo layout; every entry carries a risk class
+    tools_list = read_tools()
+    assert tools_list, "agent registry should import in the repo layout"
+    byname = {t["name"]: t for t in tools_list}
+    assert byname["run_command"]["risk"] == "dangerous", byname["run_command"]
+    assert byname["read_file"]["risk"] == "safe", byname["read_file"]
+
+    # per-run scoping lands in the session child's environment
+    senv = _session_env(allowed_creds="alpha", allowed_tools="read_file",
+                        allowed_hosts="github.com")
+    assert senv["HEARTH_ALLOWED_CREDS"] == "alpha"
+    assert senv["HEARTH_ALLOWED_TOOLS"] == "read_file"
+    assert senv["HEARTH_ALLOWED_HOSTS"] == "github.com"
+    senv2 = _session_env()
+    for k in ("HEARTH_ALLOWED_CREDS", "HEARTH_ALLOWED_TOOLS", "HEARTH_ALLOWED_HOSTS"):
+        assert senv2.get(k) == os.environ.get(k), "empty scoping must not add " + k
 
     print("hearth-mapd self-test OK")
     return 0

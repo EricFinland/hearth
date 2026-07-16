@@ -3,6 +3,35 @@
 All notable changes to hearth. Versions follow semantic versioning; each is a
 git tag and a GitHub release.
 
+## v1.1.0 - Manifest
+
+Per-run containment you can declare at launch, and the first spectacle counter.
+
+- **Capability manifests**: a launch can declare `tools: [...]` and the run may
+  use ONLY those tools, in every permission mode including bypass. Enforced in
+  the permission engine (an unlisted tool is a hard deny), filtered out of the
+  model's advertised tool list, and excluded from text-emitted tool-call parsing,
+  so there is no path around the cap. Available on background runs, interactive
+  sessions, missions, marathons, and self-evolve, via the cockpit or the API
+  (`--allowed-tools` / `HEARTH_ALLOWED_TOOLS`).
+- **Egress allowlists (tool layer)**: a launch can declare `allowed_hosts` and
+  the web tools (`web_fetch`, `web_search`, `http_request`, `fetch_to_kb`) may
+  reach ONLY those hosts (subdomains included, loopback always allowed). Every
+  outbound attempt, allowed or blocked, is recorded to a new `egress_log` audit
+  table, readable at `GET /egress`. OS-level enforcement lands in v1.4; this
+  layer stops accidents and naive injection and makes all egress visible.
+- **Swarm scoping inheritance**: specialists spawned by a mission manager now
+  inherit the manager's credential, tool, and host scoping (previously scoping
+  did not propagate to children).
+- **Cloud cost saved**: the audit log now shows what your runs would have cost
+  on a frontier cloud model; a live counter in the world HUD and the cockpit
+  stats panel.
+- **Security scoreboard**: `GET /security` and a cockpit panel showing what
+  containment is active right now (remote auth, rate limit, manifests, egress
+  activity, tripwire status, daemon health).
+- New endpoints: `GET /tools` (the registry with risk classes), `GET /egress`,
+  `GET /security`.
+
 ## v1.0.0 - Stable
 
 First stable release. hearth is a declarative NixOS system for running local LLMs

@@ -15,6 +15,8 @@ let
       model="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('model','qwen2.5-coder'))" "$req")"
       mode="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('mode','bypass'))" "$req")"
       creds="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('creds') or chr(0)*0)" "$req")"
+      tools="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('tools') or chr(0)*0)" "$req")"
+      hosts="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('allowed_hosts') or chr(0)*0)" "$req")"
       prompt="$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('prompt') or chr(0)*0)" "$req")"
       swarm="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('swarm') else chr(0)*0)" "$req")"
       marathon="$(python3 -c "import json,sys;print('1' if json.load(open(sys.argv[1])).get('marathon') else chr(0)*0)" "$req")"
@@ -25,6 +27,8 @@ let
       ws="/var/lib/hearth/agents/$id"
       mkdir -p "$ws"
       [ -n "$creds" ] && export HEARTH_ALLOWED_CREDS="$creds"
+      [ -n "$tools" ] && export HEARTH_ALLOWED_TOOLS="$tools"
+      [ -n "$hosts" ] && export HEARTH_ALLOWED_HOSTS="$hosts"
       if [ -n "$swarm" ]; then
         exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --manager --agent-name "$id" --model "$model" --mode "$mode" --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
       fi

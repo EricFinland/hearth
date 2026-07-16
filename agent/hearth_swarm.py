@@ -102,8 +102,18 @@ def _spawn_child(childid, name, model, prompt, mode, queue_dir):
     os.makedirs(queue_dir, exist_ok=True)
     tmp = os.path.join(queue_dir, childid + ".json.tmp")
     final = os.path.join(queue_dir, childid + ".json")
+    req = {"name": name, "model": model, "prompt": prompt, "mode": mode}
+    # Specialists inherit the manager's per-run scoping (credentials, capability
+    # manifest, egress allowlist); without this a scoped mission would launch
+    # unrestricted children and silently defeat the manifest.
+    for env_key, req_key in (("HEARTH_ALLOWED_CREDS", "creds"),
+                             ("HEARTH_ALLOWED_TOOLS", "tools"),
+                             ("HEARTH_ALLOWED_HOSTS", "allowed_hosts")):
+        val = os.environ.get(env_key)
+        if val:
+            req[req_key] = val
     with open(tmp, "w") as fh:
-        json.dump({"name": name, "model": model, "prompt": prompt, "mode": mode}, fh)
+        json.dump(req, fh)
     os.replace(tmp, final)
     systemctl = shutil.which("systemctl") or "/run/current-system/sw/bin/systemctl"
     sudo = shutil.which("sudo") or "/run/wrappers/bin/sudo"
@@ -280,6 +290,29 @@ def _self_test():
     metas = {m["agent_id"]: m for m in hearth_state.read_meta(db2)}
     assert metas["m"]["kind"] == "manager", metas
     assert metas["m-s1"]["kind"] == "specialist" and metas["m-s1"]["parent_id"] == "m", metas
+
+    # _spawn_child propagates the manager's per-run scoping (creds, capability
+    # manifest, egress allowlist) into the child's queue request.
+    import tempfile as _tf3
+    qd = _tf3.mkdtemp(prefix="hearth-swarmq-")
+    _saved = {k: os.environ.get(k) for k in
+              ("HEARTH_ALLOWED_CREDS", "HEARTH_ALLOWED_TOOLS", "HEARTH_ALLOWED_HOSTS")}
+    os.environ["HEARTH_ALLOWED_CREDS"] = "alpha"
+    os.environ["HEARTH_ALLOWED_TOOLS"] = "read_file,write_file"
+    os.environ.pop("HEARTH_ALLOWED_HOSTS", None)
+    try:
+        _spawn_child("m-s9", "x", "mock", "px", "bypass", qd)
+        with open(os.path.join(qd, "m-s9.json")) as fh:
+            childreq = json.load(fh)
+        assert childreq["creds"] == "alpha", childreq
+        assert childreq["tools"] == "read_file,write_file", childreq
+        assert "allowed_hosts" not in childreq, ("unset scoping stays absent", childreq)
+    finally:
+        for k, v in _saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     print("hearth-swarm self-test OK")
     return 0
 
