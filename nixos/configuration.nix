@@ -19,6 +19,7 @@
     ./modules/creator.nix
     ./modules/grow.nix
     ./modules/schedule.nix
+    ./modules/tripwire.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this

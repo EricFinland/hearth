@@ -3,6 +3,30 @@
 All notable changes to hearth. Versions follow semantic versioning; each is a
 git tag and a GitHub release.
 
+## v1.2.0 - Tripwire
+
+Honeyfile decoys that catch an agent reaching for credentials, rendered as a
+facility alarm.
+
+- **Honeyfile decoys**: every agent workspace is seeded with a few convincing
+  fake secrets files (`.aws/credentials`, `.env.production`, `secrets/api_keys.txt`),
+  each embedding a unique canary token. A well-behaved agent never reads
+  unrequested credentials; one that does trips the alarm.
+- **Two detection layers**: a direct read of a decoy by path (caught before the
+  contents ever reach the model), and a canary token surfacing in any tool's
+  output (catches a shell `cat`, `grep`, etc. via `run_command`).
+- **On a trip**: the run is flagged and, by default, killed; a row is written to
+  a new `tripwires` audit table; the agent enters a new `TRIPPED` state; and a
+  Telegram DM is sent if configured. `HEARTH_TRIPWIRE=flag` records and warns
+  without killing; `HEARTH_DECOYS=off` disables planting.
+- **System decoys**: `nixos/modules/tripwire.nix` plants world-readable bait
+  under `/var/lib/hearth/decoys` and a sudo-only decoy inside the secrets dir,
+  for an agent that goes looking beyond its workspace (raw-open detection via
+  auditd arrives in v2.0).
+- **Spectacle**: the world map flashes red with an alarm banner when any agent
+  trips, the sprite shows a pulsing siren, and the cockpit security scoreboard
+  goes armed with a live trip count. New `GET /tripwires`.
+
 ## v1.1.0 - Manifest
 
 Per-run containment you can declare at launch, and the first spectacle counter.

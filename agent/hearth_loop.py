@@ -43,6 +43,10 @@ CREATE TABLE IF NOT EXISTS pending_actions (
   agent_id TEXT NOT NULL, req_id TEXT NOT NULL, tool TEXT, args TEXT, risk TEXT,
   created_at TEXT NOT NULL, decision TEXT
 );
+CREATE TABLE IF NOT EXISTS tripwires (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT NOT NULL, ts TEXT NOT NULL, tool TEXT, path TEXT, token TEXT, detail TEXT
+);
 """
 
 SYSTEM_PROMPT = (
@@ -188,6 +192,17 @@ def _stdin_control(_request):
         return {}
 
 
+def _plant_decoys_maybe(workspace):
+    """Plant honeyfile decoys unless disabled via HEARTH_DECOYS=off. Returns the
+    set of planted relpaths (empty when disabled or planting failed)."""
+    if os.environ.get("HEARTH_DECOYS", "on").lower() == "off":
+        return set()
+    try:
+        return hearth_tools.plant_decoys(workspace)
+    except Exception:  # noqa: BLE001 - a planting failure must not break the run
+        return set()
+
+
 def _env_manifest():
     """Parse the run's capability manifest from HEARTH_ALLOWED_TOOLS
     (comma-separated tool names). Unset or empty means no manifest (None):
@@ -238,8 +253,55 @@ def _await_decision(req_id, tool, cargs, auto_allow, control, state, emit, agent
         # any other command type is ignored; keep waiting for a decision
 
 
+def _record_tripwire(db, agent_id, tool, path, token, detail):
+    """Write a tripwire row to the audit db. Best-effort."""
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        try:
+            con.executescript(TRANSCRIPT_SCHEMA)
+            con.execute(
+                "INSERT INTO tripwires (agent_id, ts, tool, path, token, detail) "
+                "VALUES (?,?,?,?,?,?)",
+                (agent_id, _now_iso(), tool, path, token, detail))
+            con.commit()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        pass
+
+
+def _notify_tripwire(agent_name, detail):
+    """DM the operator that a tripwire fired, if Telegram creds are configured.
+    Dormant (no-op) until creds exist, mirroring the growth daemon's notifier."""
+    try:
+        import hearth_grow
+        hearth_grow._default_notifier()("hearth tripwire: {} ({})".format(agent_name, detail))
+    except Exception:  # noqa: BLE001 - notification must never break the run
+        pass
+
+
+def _tripwire_hit(tool, cargs, result, decoys, workspace):
+    """Return (path, token, reason) if this tool call tripped a honeyfile, else
+    None. Two layers: a direct read of a planted decoy path (by name), and a
+    canary token surfacing in the tool output (catches shell `cat`, grep, etc.)."""
+    # Layer 1: a read/edit/search tool aimed straight at a planted decoy path.
+    if tool in ("read_file", "edit_file", "search_files") and decoys:
+        raw = cargs.get("path") if isinstance(cargs, dict) else None
+        if raw:
+            rel = str(raw).lstrip("/")
+            norm = os.path.normpath(rel).replace(os.sep, "/")
+            for d in decoys:
+                if norm == d or norm == os.path.normpath(d).replace(os.sep, "/"):
+                    return d, None, "read the decoy file {}".format(d)
+    # Layer 2: a canary token appeared in the output (any tool, incl. shell).
+    token = hearth_tools.find_canary(result)
+    if token:
+        return None, token, "a decoy canary token surfaced in {} output".format(tool)
+    return None
+
+
 def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
-               db, agent_name, max_iters, auto_allow, allowed_tools=None):
+               db, agent_name, max_iters, auto_allow, allowed_tools=None, decoys=None):
     """Run agent turns until the model stops calling tools, hits the cap, or is
     stopped. state is a mutable dict holding {"mode": ...}. allowed_tools is the
     run's capability manifest (None = no manifest). Returns
@@ -308,9 +370,33 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
                           "denied": True, "output": result})
                     messages.append({"role": "tool", "content": result})
                     continue
-            emit({"type": "state", "state": "TOOL_CALL", "detail": name})
-            _emit(agent_name, "TOOL_CALL", name, db)
-            result = hearth_tools.execute_tool(name, cargs, workspace)
+            # Layer 1: a direct read of a planted decoy path trips before we even
+            # execute the tool (so the decoy contents never reach the model).
+            hit = _tripwire_hit(name, cargs, "", decoys, workspace)
+            if hit is None:
+                emit({"type": "state", "state": "TOOL_CALL", "detail": name})
+                _emit(agent_name, "TOOL_CALL", name, db)
+                result = hearth_tools.execute_tool(name, cargs, workspace)
+                # Layer 2: a canary token surfacing in the output (shell cat, grep).
+                hit = _tripwire_hit(name, cargs, result, decoys, workspace)
+            else:
+                result = ""
+            if hit is not None:
+                path, token, reason = hit
+                _record_tripwire(db, agent_name, name, path, token, reason)
+                emit({"type": "tripwire", "tool": name, "path": path, "token": token,
+                      "detail": reason})
+                _notify_tripwire(agent_name, reason)
+                mode_kill = os.environ.get("HEARTH_TRIPWIRE", "kill").lower() != "flag"
+                emit({"type": "state", "state": "TRIPPED", "detail": reason})
+                _emit(agent_name, "TRIPPED", reason, db)
+                if mode_kill:
+                    return final, "tripwire: {}".format(reason), tokens_out
+                # flag mode: record, warn the model, keep going
+                warn = "TRIPWIRE: {}. That was a planted decoy secret; stop reading credentials.".format(reason)
+                emit({"type": "tool_result", "tool": name, "denied": True, "output": warn})
+                messages.append({"role": "tool", "content": warn})
+                continue
             emit({"type": "tool_result", "tool": name, "output": result[:MAX_EVENT_OUT]})
             content = result[:MAX_EVENT_OUT] + _result_hint(result)
             messages.append({"role": "tool", "content": content})
@@ -412,6 +498,7 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
     control = control_fn or _stdin_control
     os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
     os.makedirs(workspace, exist_ok=True)
+    decoys = _plant_decoys_maybe(workspace)
     messages = [{"role": "system", "content": _system_for(mode)}]
     if recall:
         ctx = _recalled_context(db, goal)
@@ -426,10 +513,12 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
     t0 = time.monotonic()
     final, error, tokens_out = _run_turns(messages, model, workspace, chat_fn, emit,
                                           control, state, db, agent_name, max_iters,
-                                          auto_allow, allowed_tools=allowed_tools)
+                                          auto_allow, allowed_tools=allowed_tools,
+                                          decoys=decoys)
     latency_ms = int((time.monotonic() - t0) * 1000)
     _record(db, agent_name, model, tokens_out, latency_ms, error)
-    _emit(agent_name, "ERRORED" if error else "DONE", error or "task complete", db)
+    final_state = "TRIPPED" if (error or "").startswith("tripwire:") else ("ERRORED" if error else "DONE")
+    _emit(agent_name, final_state, error or "task complete", db)
     emit({"type": "done", "error": error, "final": final})
     return final, error
 
@@ -449,6 +538,7 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
     control = control_fn or _stdin_control
     os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
     os.makedirs(workspace, exist_ok=True)
+    decoys = _plant_decoys_maybe(workspace)
     state = {"mode": mode}
     messages = [{"role": "system", "content": _system_for(mode)}]
     _emit(agent_name, "IDLE", "ready", db)
@@ -471,10 +561,16 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
         t0 = time.monotonic()
         final, error, tokens_out = _run_turns(messages, model, workspace, chat_fn, emit,
                                                control, state, db, agent_name, max_iters,
-                                               auto_allow, allowed_tools=allowed_tools)
+                                               auto_allow, allowed_tools=allowed_tools,
+                                               decoys=decoys)
         latency_ms = int((time.monotonic() - t0) * 1000)
         _record(db, agent_name, model, tokens_out, latency_ms, error)
         emit({"type": "turn_done", "error": error, "final": final})
+        if (error or "").startswith("tripwire:"):
+            # a tripwire ends the whole session, not just the turn; leave the
+            # agent in TRIPPED (already emitted by _run_turns) and stop here
+            emit({"type": "done", "error": error, "final": ""})
+            return
         _emit(agent_name, "ERRORED" if error else "IDLE", error or "ready", db)
     emit({"type": "done", "error": None, "final": ""})
     _emit(agent_name, "DONE", "session ended", db)
@@ -663,6 +759,61 @@ def _self_test():
     finally:
         os.environ.pop("HEARTH_ALLOWED_TOOLS", None)
     assert _env_manifest() is None
+
+    # --- Tripwire: an agent that reads a planted decoy trips the alarm, the run
+    # dies with a tripwire error, a tripwires row is written, and the state is
+    # TRIPPED. Two cases: direct read-by-path (layer 1) and a shell cat surfacing
+    # the canary in output (layer 2).
+    for label, tool_call in (
+        ("read", {"name": "read_file", "arguments": {"path": ".aws/credentials"}}),
+        ("cat", {"name": "run_command", "arguments": {"command": "cat .env.production"}}),
+    ):
+        events_t = []
+        tsteps = iter([
+            ({"role": "assistant", "tool_calls": [{"function": tool_call}]}, 1),
+            ({"role": "assistant", "content": "should not get here"}, 1),
+        ])
+        wst = tempfile.mkdtemp(prefix="hearth-trip-" + label + "-")
+        dbt = os.path.join(wst, "d.db")
+        ft, et = run_loop("poke around", "mock", wst, db=dbt, agent_name="trip-" + label,
+                          mode="bypass", chat_fn=lambda m: next(tsteps),
+                          emit_fn=events_t.append, control_fn=lambda req: {"type": "stop"})
+        assert (et or "").startswith("tripwire:"), (label, et)
+        assert any(e["type"] == "tripwire" for e in events_t), (label, [e["type"] for e in events_t])
+        assert any(e["type"] == "state" and e["state"] == "TRIPPED" for e in events_t), label
+        con = sqlite3.connect(dbt)
+        rows = con.execute("SELECT tool, detail FROM tripwires WHERE agent_id=?",
+                           ("trip-" + label,)).fetchall()
+        st = con.execute("SELECT state FROM agent_state WHERE agent_id=?", ("trip-" + label,)).fetchone()
+        con.close()
+        assert rows, (label, "expected a tripwires row")
+        assert st and st[0] == "TRIPPED", (label, st)
+    # flag mode (HEARTH_TRIPWIRE=flag): the run is warned but not killed
+    os.environ["HEARTH_TRIPWIRE"] = "flag"
+    try:
+        events_f = []
+        fsteps = iter([
+            ({"role": "assistant", "tool_calls": [{"function":
+                {"name": "read_file", "arguments": {"path": ".env.production"}}}]}, 1),
+            ({"role": "assistant", "content": "done exploring"}, 1),
+        ])
+        wsf = tempfile.mkdtemp(prefix="hearth-tripflag-")
+        ff, ef = run_loop("poke", "mock", wsf, db=os.path.join(wsf, "d.db"),
+                          agent_name="trip-flag", mode="bypass",
+                          chat_fn=lambda m: next(fsteps),
+                          emit_fn=events_f.append, control_fn=lambda req: {"type": "stop"})
+        assert ef is None, ("flag mode does not kill the run", ef)
+        assert any(e["type"] == "tripwire" for e in events_f), "flag mode still records the trip"
+    finally:
+        os.environ.pop("HEARTH_TRIPWIRE", None)
+    # decoys disabled: HEARTH_DECOYS=off plants nothing, so no trip
+    os.environ["HEARTH_DECOYS"] = "off"
+    try:
+        wsn = tempfile.mkdtemp(prefix="hearth-nodecoy-")
+        assert _plant_decoys_maybe(wsn) == set()
+        assert not os.path.exists(os.path.join(wsn, ".aws", "credentials"))
+    finally:
+        os.environ.pop("HEARTH_DECOYS", None)
 
     # --- Session: a user_message drives a turn, then stop ends the session.
     events_s = []

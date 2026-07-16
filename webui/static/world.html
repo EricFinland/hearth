@@ -35,6 +35,20 @@
     letter-spacing: .05em;
   }
   #crtToggle:hover { color: #5fd0ff; border-color: #5fd0ff; }
+  /* security alarm (honeyfile tripwire) */
+  #alarmFlash {
+    position: fixed; inset: 0; z-index: 40; pointer-events: none;
+    display: none; box-shadow: inset 0 0 220px 60px rgba(255,20,20,0.55);
+  }
+  #alarmFlash.on { display: block; animation: alarmPulse 0.9s ease-in-out infinite; }
+  @keyframes alarmPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
+  #alarmBanner {
+    position: fixed; top: 52px; left: 50%; transform: translateX(-50%);
+    z-index: 41; display: none; max-width: 92vw;
+    background: rgba(120,10,10,0.95); color: #ffe0e0; border: 1px solid #ff5050;
+    border-radius: 8px; padding: 8px 18px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 4px 24px rgba(255,20,20,0.5); text-align: center;
+  }
   /* HUD top bar */
   #hud {
     position: fixed; top: 0; left: 0; right: 0; z-index: 10;
@@ -209,6 +223,9 @@
 <div id="crt"></div>
 <div id="crt-vignette"></div>
 <button id="crtToggle" title="toggle scanlines">CRT</button>
+<!-- security alarm (honeyfile tripwire) -->
+<div id="alarmFlash"></div>
+<div id="alarmBanner"></div>
 <!-- HUD top -->
 <div id="hud">
   <div class="logo"><span class="flame">&#x1F525;</span> hearth facility</div>
@@ -312,6 +329,7 @@ const STATE_COLOR = {
   TOOL_CALL:        '#9fe0ff',
   WAITING_IO:       '#7080a0',
   WAITING_APPROVAL: '#f0a030',
+  TRIPPED:          '#ff2b2b',
   ERRORED:          '#e06a6a',
   DONE:             '#6fcf7f',
 };
@@ -323,6 +341,7 @@ const STATE_LABEL = {
   TOOL_CALL:        'working',
   WAITING_IO:       'waiting',
   WAITING_APPROVAL: 'approval',
+  TRIPPED:          'TRIPWIRE',
   ERRORED:          'error',
   DONE:             'done',
 };
@@ -711,6 +730,8 @@ class Sprite {
       this.drawApprovalBubble(bx, bubbleY);
     } else if (this.state === 'ERRORED') {
       this.drawErrorCloud(bx, bubbleY);
+    } else if (this.state === 'TRIPPED') {
+      this.drawAlarm(bx, bubbleY);
     } else if (this.state === 'TOOL_CALL') {
       this.drawWrench(bx + R + 8, by - 8);
     } else if (this.state === 'DONE' && !this.fadeOut) {
@@ -826,6 +847,28 @@ class Sprite {
     ctx.textBaseline = 'middle';
     ctx.fillText('!', bx, by - 10);
     ctx.globalAlpha = this.alpha;
+  }
+
+  drawAlarm(bx, by) {
+    // a pulsing red siren above the sprite: caught reading a honeyfile decoy
+    const pulse = Math.abs(Math.sin(this.age * 0.25));
+    ctx.save();
+    ctx.globalAlpha = this.alpha;
+    // glow
+    ctx.fillStyle = 'rgba(255,40,40,' + (0.15 + pulse * 0.25) + ')';
+    ctx.beginPath(); ctx.arc(bx, by - 8, 16 + pulse * 5, 0, Math.PI * 2); ctx.fill();
+    // siren dome
+    ctx.fillStyle = pulse > 0.5 ? '#ff5050' : '#b81818';
+    ctx.strokeStyle = '#ffcaca'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(bx, by - 6, 6, Math.PI, 0);
+    ctx.lineTo(bx + 5, by - 4); ctx.lineTo(bx - 5, by - 4); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffd7d7';
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('⚠', bx, by - 18);
+    ctx.restore();
   }
 
   drawWrench(bx, by) {
@@ -1359,8 +1402,10 @@ async function fetchState() {
 }
 
 function upsertSprite(id, state, detail) {
+  let prev = null;
   if (sprites.has(id)) {
     const sp = sprites.get(id);
+    prev = sp.state;
     sp.state = state;
     sp.detail = detail || '';
   } else {
@@ -1369,6 +1414,25 @@ function upsertSprite(id, state, detail) {
     sp.detail = detail || '';
     sprites.set(id, sp);
   }
+  // A fresh transition into TRIPPED fires the facility alarm (once per trip).
+  if (state === 'TRIPPED' && prev !== 'TRIPPED') triggerAlarm(id, detail);
+}
+
+// ---- security alarm (honeyfile tripwire) ----
+let alarmTimer = null;
+function triggerAlarm(id, detail) {
+  const banner = document.getElementById('alarmBanner');
+  const flash = document.getElementById('alarmFlash');
+  banner.innerHTML = '&#128680; TRIPWIRE &mdash; <b>' + (id || 'an agent') +
+    '</b> read a honeyfile decoy. run flagged' +
+    (detail ? ' &middot; ' + detail.replace(/</g, '&lt;') : '');
+  banner.style.display = 'block';
+  flash.classList.add('on');
+  clearTimeout(alarmTimer);
+  alarmTimer = setTimeout(() => {
+    flash.classList.remove('on');
+    banner.style.display = 'none';
+  }, 8000);
 }
 
 // SSE for instant updates

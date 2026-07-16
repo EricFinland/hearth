@@ -373,6 +373,26 @@ def read_egress(db, agent="", limit=200):
         return []
 
 
+def read_tripwires(db, limit=100):
+    """Read tripwire hits (honeyfile decoy reads), newest first."""
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        if not _table_exists(con, "tripwires"):
+            con.close()
+            return []
+        cur = con.execute(
+            "SELECT agent_id, ts, tool, path, token, detail FROM tripwires "
+            "ORDER BY id DESC LIMIT ?", (limit,))
+        rows = [{"agent": r[0], "ts": r[1], "tool": r[2], "path": r[3],
+                 "token": r[4], "detail": r[5]} for r in cur.fetchall()]
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
 def _table_exists(con, name):
     try:
         return con.execute(
@@ -1088,6 +1108,9 @@ class Handler(BaseHTTPRequestHandler):
                               "application/json")
         if path == "/security":
             return self._send(200, json.dumps(read_security(self.db)), "application/json")
+        if path == "/tripwires":
+            return self._send(200, json.dumps({"tripwires": read_tripwires(self.db)}),
+                              "application/json")
         if path == "/metrics":
             return self._send(200, prometheus_metrics(self.db), "text/plain; version=0.0.4; charset=utf-8")
         parts = path.strip("/").split("/")
@@ -1539,7 +1562,18 @@ def _self_test():
     assert blocked and blocked[0]["host"] == "evil.com", eg
     sec = read_security(sdb, is_active_fn=lambda u: u == "hearth-mapd.service")
     assert sec["egress"] == {"logged": 2, "blocked": 1}, sec
-    assert sec["tripwires"] == {"armed": False, "trips": 0}, sec  # armed in v1.2
+    assert sec["tripwires"] == {"armed": False, "trips": 0}, sec  # not armed until a tripwires table exists
+    # once a tripwire fires, the scoreboard shows armed + a count, and /tripwires reads it back
+    con = sqlite3.connect(sdb)
+    con.execute("CREATE TABLE IF NOT EXISTS tripwires (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "agent_id TEXT NOT NULL, ts TEXT NOT NULL, tool TEXT, path TEXT, token TEXT, detail TEXT)")
+    con.execute("INSERT INTO tripwires (agent_id, ts, tool, path, token, detail) "
+                "VALUES ('w9', ?, 'read_file', '.aws/credentials', 'HEARTH-CANARY-abc', 'read the decoy')", (_now_iso(),))
+    con.commit(); con.close()
+    tw = read_tripwires(sdb)
+    assert len(tw) == 1 and tw[0]["agent"] == "w9" and tw[0]["tool"] == "read_file", tw
+    sec2 = read_security(sdb, is_active_fn=lambda u: False)
+    assert sec2["tripwires"] == {"armed": True, "trips": 1}, sec2
     assert sec["daemons"]["hearth-mapd.service"] is True and sec["daemons"]["hearth-grow.service"] is False, sec
     assert sec["manifests_supported"] is True
 

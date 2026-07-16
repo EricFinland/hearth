@@ -40,6 +40,7 @@ STATES = [
     "TOOL_CALL",  # executing a tool / command
     "WAITING_IO", # blocked on external I/O (network, disk, another agent)
     "WAITING_APPROVAL",  # paused, needs the user to approve or deny a tool
+    "TRIPPED",    # read a honeyfile decoy; run flagged and (by default) killed
     "ERRORED",    # last step failed
     "DONE",       # finished, walking off
 ]
@@ -54,6 +55,7 @@ STATE_ICONS = {
     "TOOL_CALL": "🔧",
     "WAITING_IO": "⏳",
     "WAITING_APPROVAL": "✋",
+    "TRIPPED": "🚨",
     "ERRORED": "❗",
     "DONE": "✅",
 }
@@ -243,6 +245,7 @@ def _sim(n, db):
 def _self_test():
     assert "WAITING_APPROVAL" in STATES, "WAITING_APPROVAL missing from STATES"
     assert "WAITING_APPROVAL" in STATE_ICONS, "WAITING_APPROVAL missing from STATE_ICONS"
+    assert "TRIPPED" in STATES and "TRIPPED" in STATE_ICONS, "TRIPPED must be a known state"
     import tempfile
     db = os.path.join(tempfile.mkdtemp(prefix="hearth-state-"), "s.db")
     emit_state("a1", "WAITING_APPROVAL", "needs approval: run_command", db=db)
