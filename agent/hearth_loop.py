@@ -49,6 +49,26 @@ CREATE TABLE IF NOT EXISTS tripwires (
 );
 """
 
+# flight recorder: one row per step of a run (model turns, tool calls, tripwires,
+# and the final outcome), so a finished run can be replayed from the audit db.
+STEPS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS run_steps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent_id TEXT,
+  ts TEXT,
+  seq INTEGER,
+  kind TEXT,
+  tool TEXT,
+  args TEXT,
+  output TEXT,
+  duration_ms INTEGER,
+  verdict TEXT
+);
+"""
+
+MAX_STEP_ARGS = 2000  # cap recorded tool args per step
+MAX_STEP_OUT = 4000  # cap recorded output per step
+
 SYSTEM_PROMPT = (
     "You are a capable agent working in a sandboxed workspace. You have tools to "
     "run shell commands, read and write files, and make HTTP requests. Use them to "
@@ -258,11 +278,31 @@ def _record_tripwire(db, agent_id, tool, path, token, detail):
     try:
         con = sqlite3.connect(db, timeout=10)
         try:
-            con.executescript(TRANSCRIPT_SCHEMA)
+            con.executescript(TRANSCRIPT_SCHEMA + STEPS_SCHEMA)
             con.execute(
                 "INSERT INTO tripwires (agent_id, ts, tool, path, token, detail) "
                 "VALUES (?,?,?,?,?,?)",
                 (agent_id, _now_iso(), tool, path, token, detail))
+            con.commit()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        pass
+
+
+def _record_step(db, agent_id, seq, kind, tool, args, output, duration_ms, verdict):
+    """Write one flight-recorder step to the audit db. Best-effort: a recorder
+    failure must never break the run."""
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        try:
+            con.executescript(STEPS_SCHEMA)
+            con.execute(
+                "INSERT INTO run_steps (agent_id, ts, seq, kind, tool, args, "
+                "output, duration_ms, verdict) VALUES (?,?,?,?,?,?,?,?,?)",
+                (agent_id, _now_iso(), seq, kind, tool,
+                 (args or "")[:MAX_STEP_ARGS], (output or "")[:MAX_STEP_OUT],
+                 duration_ms, verdict))
             con.commit()
         finally:
             con.close()
@@ -308,13 +348,27 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
     (final_text, error, tokens_out)."""
     tokens_out = 0
     final = ""
+    # flight recorder: one run_steps row per model turn / tool call / tripwire,
+    # plus a final done or error row. HEARTH_RECORDER=off disables it.
+    rec_on = os.environ.get("HEARTH_RECORDER", "on").lower() != "off"
+    rec_seq = [1]  # mutable so the closure can advance it across the run
+
+    def _step(kind, tool, args, output, duration_ms, verdict):
+        if rec_on:
+            _record_step(db, agent_name, rec_seq[0], kind, tool, args, output,
+                         duration_ms, verdict)
+            rec_seq[0] += 1
+
     for _ in range(max_iters):
         emit({"type": "state", "state": "THINKING", "detail": "calling " + model})
         _emit(agent_name, "THINKING", "calling " + model, db)
+        t_chat = time.monotonic()
         msg, tout = chat_fn(messages)
+        chat_ms = int((time.monotonic() - t_chat) * 1000)
         tokens_out += tout
         messages.append(msg)
         content = msg.get("content", "")
+        _step("think", "", "", (content or "")[:500], chat_ms, "")
         if content:
             emit({"type": "message", "role": "assistant", "content": content})
         calls = msg.get("tool_calls") or []
@@ -326,6 +380,7 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
                 final = content
                 if state["mode"] == "plan":
                     emit({"type": "plan", "content": content})
+                _step("done", "", "", (final or "")[:500], 0, "")
                 return final, None, tokens_out
         for call in calls:
             fn = call.get("function") or {}
@@ -352,7 +407,9 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
                         state["mode"], name)
                 emit({"type": "tool_result", "tool": name, "denied": True, "output": result})
                 messages.append({"role": "tool", "content": result})
+                _step("tool", name, json.dumps(cargs), result, 0, "deny")
                 continue
+            step_verdict = "allow"
             if verdict == "gate":
                 req_id = uuid.uuid4().hex[:8]
                 emit({"type": "tool_request", "id": req_id, "tool": name,
@@ -363,20 +420,26 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
                                           state, emit, agent_name, db,
                                           allowed_tools=allowed_tools)
                 if allowed is None:
+                    _step("error", "", "", "stopped by user", 0, "")
                     return final, "stopped by user", tokens_out
                 if not allowed:
                     result = "denied by user"
                     emit({"type": "tool_result", "tool": name, "id": req_id,
                           "denied": True, "output": result})
                     messages.append({"role": "tool", "content": result})
+                    _step("tool", name, json.dumps(cargs), result, 0, "gate:deny")
                     continue
+                step_verdict = "gate:allow"
             # Layer 1: a direct read of a planted decoy path trips before we even
             # execute the tool (so the decoy contents never reach the model).
             hit = _tripwire_hit(name, cargs, "", decoys, workspace)
             if hit is None:
                 emit({"type": "state", "state": "TOOL_CALL", "detail": name})
                 _emit(agent_name, "TOOL_CALL", name, db)
+                t_tool = time.monotonic()
                 result = hearth_tools.execute_tool(name, cargs, workspace)
+                tool_ms = int((time.monotonic() - t_tool) * 1000)
+                _step("tool", name, json.dumps(cargs), result, tool_ms, step_verdict)
                 # Layer 2: a canary token surfacing in the output (shell cat, grep).
                 hit = _tripwire_hit(name, cargs, result, decoys, workspace)
             else:
@@ -384,6 +447,7 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             if hit is not None:
                 path, token, reason = hit
                 _record_tripwire(db, agent_name, name, path, token, reason)
+                _step("tripwire", name, "", reason, 0, "tripped")
                 emit({"type": "tripwire", "tool": name, "path": path, "token": token,
                       "detail": reason})
                 _notify_tripwire(agent_name, reason)
@@ -391,6 +455,7 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
                 emit({"type": "state", "state": "TRIPPED", "detail": reason})
                 _emit(agent_name, "TRIPPED", reason, db)
                 if mode_kill:
+                    _step("error", "", "", "tripwire: {}".format(reason), 0, "")
                     return final, "tripwire: {}".format(reason), tokens_out
                 # flag mode: record, warn the model, keep going
                 warn = "TRIPWIRE: {}. That was a planted decoy secret; stop reading credentials.".format(reason)
@@ -400,6 +465,7 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             emit({"type": "tool_result", "tool": name, "output": result[:MAX_EVENT_OUT]})
             content = result[:MAX_EVENT_OUT] + _result_hint(result)
             messages.append({"role": "tool", "content": content})
+    _step("error", "", "", "hit iteration cap ({})".format(max_iters), 0, "")
     return final, "hit iteration cap ({})".format(max_iters), tokens_out
 
 
@@ -413,7 +479,7 @@ def make_db_transport(db, agent_id, poll_interval=0.5):
 
     def _con():
         con = sqlite3.connect(db, timeout=10)
-        con.executescript(TRANSCRIPT_SCHEMA)
+        con.executescript(TRANSCRIPT_SCHEMA + STEPS_SCHEMA)
         return con
 
     def emit(event):
@@ -872,6 +938,47 @@ def _self_test():
     ran = [e for e in tr if e.get("type") == "tool_result" and not e.get("denied")]
     assert ran and "dbok" in ran[0].get("output", ""), ("expected the approved command to run", tr)
     assert pend and pend[0][0] == "run_command" and pend[0][1] == "allow", pend
+
+    # --- Flight recorder: a run writes think, tool, and done steps to run_steps
+    # in ascending seq order; HEARTH_RECORDER=off writes nothing.
+    wsr = tempfile.mkdtemp(prefix="hearth-loopR-")
+    dbr = os.path.join(wsr, "d.db")
+    rsteps = iter([
+        ({"role": "assistant", "tool_calls": [{"function": {"name": "write_file",
+            "arguments": {"path": "r.txt", "content": "rec"}}}]}, 1),
+        ({"role": "assistant", "content": "wrote r.txt"}, 1),
+    ])
+    fr, er = run_loop("write r.txt", "mock", wsr, db=dbr, agent_name="rec",
+                      chat_fn=lambda m: next(rsteps))
+    assert er is None, er
+    con = sqlite3.connect(dbr)
+    rrows = con.execute(
+        "SELECT seq, kind, tool, verdict, duration_ms, output FROM run_steps "
+        "WHERE agent_id='rec' ORDER BY seq").fetchall()
+    con.close()
+    rseqs = [r[0] for r in rrows]
+    assert rseqs == sorted(rseqs) and len(set(rseqs)) == len(rseqs), rrows
+    rkinds = [r[1] for r in rrows]
+    assert "think" in rkinds, rrows
+    rtools = [r for r in rrows if r[1] == "tool"]
+    assert rtools and rtools[0][2] == "write_file", rrows
+    assert rtools[0][3] == "allow" and rtools[0][4] >= 0, rrows
+    assert rkinds[-1] == "done" and "wrote r.txt" in rrows[-1][5], rrows
+    os.environ["HEARTH_RECORDER"] = "off"
+    try:
+        wso = tempfile.mkdtemp(prefix="hearth-loopRoff-")
+        dbo = os.path.join(wso, "d.db")
+        osteps = iter([({"role": "assistant", "content": "nothing to do"}, 1)])
+        fo, eo = run_loop("noop", "mock", wso, db=dbo, agent_name="rec-off",
+                          chat_fn=lambda m: next(osteps))
+        assert eo is None, eo
+        con = sqlite3.connect(dbo)
+        con.executescript(STEPS_SCHEMA)  # the table may not even exist yet
+        nrows = con.execute("SELECT COUNT(*) FROM run_steps").fetchone()[0]
+        con.close()
+        assert nrows == 0, nrows
+    finally:
+        os.environ.pop("HEARTH_RECORDER", None)
 
     print("hearth-loop self-test OK:", final)
     return 0

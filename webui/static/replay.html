@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>hearth replay</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; min-height:100%; background:#05080f; color:#cfe6ff;
+    font-family: ui-monospace, Menlo, Consolas, monospace; }
+  a { color:#5fd0ff; }
+  .card { background:rgba(8,14,24,0.62); border:1px solid #16324f; border-radius:10px;
+    padding:10px 12px; backdrop-filter: blur(3px); }
+  .title { color:#5fd0ff; text-transform:uppercase; letter-spacing:.08em; font-size:12px; margin-bottom:8px; }
+  .muted { color:#8a93a0; font-size:12px; }
+  .navlink { font-size:10px; color:#8a93a0; text-decoration:none;
+    border:1px solid #16324f; padding:2px 8px; border-radius:6px; background:rgba(5,8,15,0.7); }
+  .navlink:hover { color:#5fd0ff; border-color:#5fd0ff; }
+  #wrap { max-width:1100px; margin:0 auto; padding:14px; }
+  /* ---- picker ---- */
+  #picker { display:none; }
+  .run { display:flex; align-items:center; gap:10px; padding:6px 10px; margin:5px 0;
+    border:1px solid #16324f; border-radius:8px; text-decoration:none; color:#cfe6ff; font-size:12px; }
+  .run:hover { border-color:#5fd0ff; }
+  .run b { color:#cfe6ff; }
+  .badge { font-size:9px; text-transform:uppercase; letter-spacing:.06em;
+    border:1px solid; border-radius:6px; padding:1px 7px; }
+  @keyframes alarmPulse { 0%,100% { opacity:.45; } 50% { opacity:1; } }
+  .badge.alarm { animation: alarmPulse .8s ease-in-out infinite; }
+  /* ---- viewer ---- */
+  #viewer { display:none; grid-template-columns:320px 1fr; gap:14px; }
+  #viewer.on { display:grid; }
+  #head { grid-column:1/3; display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  #head .spacer { margin-left:auto; }
+  #timelineCard { grid-column:1/3; }
+  #segBar { display:flex; height:14px; border-radius:4px; overflow:hidden;
+    border:1px solid #16324f; background:#070d17; margin-bottom:6px; }
+  .seg { flex:1; min-width:2px; opacity:.55; cursor:pointer; }
+  .seg:hover { opacity:.85; }
+  .seg.cur { opacity:1; box-shadow: inset 0 0 0 1px #fff; }
+  #scrub { width:100%; accent-color:#5fd0ff; margin:2px 0 8px; }
+  .btn { background:#16324f; color:#cfe6ff; border:1px solid #1e4a6e;
+    padding:5px 12px; border-radius:6px; cursor:pointer; font-size:11px;
+    font-family:inherit; white-space:nowrap; }
+  .btn:hover { background:#1e4a6e; }
+  .btn.primary { background:#5fd0ff; color:#04150c; border-color:#5fd0ff; }
+  #transport { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  #stepReadout { margin-left:auto; font-size:11px; color:#8a93a0; }
+  #stage { display:block; width:100%; background:#070d17; border:1px solid #0e2236; border-radius:8px; }
+  #caption { margin-top:8px; min-height:18px; font-size:12px; color:#5fd0ff;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #detailBody .chip { display:inline-block; font-size:10px; border:1px solid #16324f;
+    border-radius:6px; padding:2px 8px; margin:0 6px 6px 0; color:#cfe6ff; }
+  #detailBody .chip.dim { color:#8a93a0; }
+  #detailBody .lbl { font-size:9px; text-transform:uppercase; letter-spacing:.08em;
+    color:#8a93a0; margin:6px 0 3px; }
+  #detailBody pre { margin:0; background:#070d17; border:1px solid #0e2236; border-radius:6px;
+    padding:6px 8px; font-size:11px; color:#9fb6cc; white-space:pre-wrap; word-break:break-word;
+    max-height:180px; overflow:auto; }
+  #detailBody pre.out { max-height:300px; color:#cfe6ff; }
+  @media (max-width:720px) {
+    #viewer.on { display:block; }
+    #viewer .card { margin-bottom:12px; }
+  }
+</style></head>
+<body>
+<div id="wrap">
+  <div class="card" id="picker">
+    <div class="title">replay: pick a run</div>
+    <div style="margin-bottom:8px;">
+      <a class="navlink" href="/command">command</a>
+      <a class="navlink" href="/world">world</a>
+    </div>
+    <div id="pickerBody" class="muted">loading runs...</div>
+  </div>
+  <div id="viewer">
+    <div class="card" id="head">
+      <span class="title" style="margin:0;">replay</span>
+      <b id="hdrAgent" style="color:#cfe6ff;"></b>
+      <span class="muted" id="hdrSteps"></span>
+      <span class="muted" id="hdrDur"></span>
+      <span class="spacer"></span>
+      <a class="navlink" href="/replay">all runs</a>
+      <a class="navlink" href="/command">command</a>
+      <a class="navlink" href="/world">world</a>
+    </div>
+    <div class="card" id="timelineCard">
+      <div class="title">timeline</div>
+      <div id="segBar"></div>
+      <input type="range" id="scrub" min="1" max="1" value="1" step="1" />
+      <div id="transport">
+        <button class="btn" id="btnPrev" title="step back (left arrow)">&lt;&lt;</button>
+        <button class="btn primary" id="btnPlay" title="play/pause (space)">play</button>
+        <button class="btn" id="btnNext" title="step forward (right arrow)">&gt;&gt;</button>
+        <button class="btn" id="btnSpeed" title="playback speed">1x</button>
+        <span id="stepReadout"></span>
+      </div>
+    </div>
+    <div class="card" id="stageCard">
+      <div class="title">stage</div>
+      <canvas id="stage" width="296" height="230"></canvas>
+      <div id="caption">&nbsp;</div>
+    </div>
+    <div class="card" id="detailCard">
+      <div class="title">step detail</div>
+      <div id="detailBody" class="muted">loading...</div>
+    </div>
+  </div>
+</div>
+<script>
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;");}
+const KIND_COLOR={think:"#3a5a7a",tool:"#5fd0ff",tripwire:"#ff2b2b",error:"#e06a6a",done:"#6fcf7f"};
+const VERDICT_COLOR={allow:"#6fcf7f",deny:"#e06a6a","gate:allow":"#f0a030","gate:deny":"#e06a6a",tripped:"#ff2b2b"};
+function kindColor(k){return KIND_COLOR[k]||"#f0a030";}
+function relTime(ts){
+  if(!ts)return "";
+  const t=Date.parse(ts); if(isNaN(t))return String(ts);
+  const s=Math.max(0,(Date.now()-t)/1000);
+  if(s<60)return Math.round(s)+"s ago";
+  if(s<3600)return Math.round(s/60)+"m ago";
+  if(s<86400)return Math.round(s/3600)+"h ago";
+  return Math.round(s/86400)+"d ago";
+}
+function fmtDur(ms){
+  if(!isFinite(ms)||ms<=0)return "0s";
+  const s=ms/1000;
+  if(s<60)return (s<10?s.toFixed(1):Math.round(s))+"s";
+  if(s<3600)return Math.floor(s/60)+"m "+Math.round(s%60)+"s";
+  return Math.floor(s/3600)+"h "+Math.floor((s%3600)/60)+"m";
+}
+const agentId=new URLSearchParams(location.search).get("agent");
+
+// ---- run picker ----
+async function initPicker(){
+  document.getElementById("picker").style.display="block";
+  const body=document.getElementById("pickerBody");
+  try{
+    const j=await(await fetch("/replay/agents")).json();
+    const list=j.agents||[];
+    body.innerHTML=list.length?list.map(a=>{
+      const k=a.last_kind||"";
+      const col=k==="done"?"#6fcf7f":(k==="error"||k==="tripwire")?"#ff5050":"#f0a030";
+      const alarm=k==="tripwire"?" alarm":"";
+      return `<a class="run" href="/replay?agent=${encodeURIComponent(a.agent_id)}">
+        <b>${esc(a.agent_id)}</b>
+        <span class="muted">${a.steps|0} steps &middot; ${a.tools|0} tool calls &middot; ${esc(relTime(a.last_ts))}</span>
+        <span style="margin-left:auto;"></span>
+        <span class="badge${alarm}" style="border-color:${col};color:${col}">${esc(k||"unknown")}</span>
+      </a>`;}).join(""):"<div class='muted'>no recorded runs yet. launch an agent from /command first.</div>";
+  }catch(e){body.innerHTML="error loading runs: "+esc(String(e));}
+}
+
+// ---- viewer ----
+let steps=[],cur=0,playing=false,speed=1,lastTick=0,segEls=[];
+let frame=0,particles=[],sparkles=[];
+let capTarget="",capShown=0,capTick=0;
+const stage=document.getElementById("stage"),sx=stage.getContext("2d");
+
+function setCaption(t){capTarget=t||"";capShown=0;}
+function updateCaption(){
+  capTick++;
+  if(capShown<capTarget.length&&capTick%2===0)capShown++;
+  const el=document.getElementById("caption");
+  el.textContent=capTarget.slice(0,capShown)+(capShown<capTarget.length?"_":"")||" ";
+}
+function prettyArgs(args){
+  if(args==null||args==="")return "";
+  if(typeof args==="string"){
+    try{return JSON.stringify(JSON.parse(args),null,2);}catch(e){return args;}
+  }
+  try{return JSON.stringify(args,null,2);}catch(e){return String(args);}
+}
+function renderDetail(){
+  const s=steps[cur]||{};
+  const kCol=kindColor(s.kind);
+  const v=s.verdict||"";
+  const vCol=VERDICT_COLOR[v]||"#8a93a0";
+  const argsText=prettyArgs(s.args);
+  document.getElementById("detailBody").innerHTML=
+    `<div>
+      <span class="chip" style="border-color:${kCol};color:${kCol}">${esc(s.kind||"?")}</span>`+
+      (s.tool?`<span class="chip">${esc(s.tool)}</span>`:"")+
+      (v?`<span class="chip" style="border-color:${vCol};color:${vCol}">${esc(v)}</span>`:"")+
+      `<span class="chip dim">${s.duration_ms|0} ms</span>
+      <span class="chip dim">${esc(String(s.ts||"").replace("T"," ").slice(0,19))}</span>
+    </div>`+
+    (argsText?`<div class="lbl">args</div><pre>${esc(argsText)}</pre>`:"")+
+    `<div class="lbl">output</div><pre class="out">${esc(s.output||"(no output)")}</pre>`;
+}
+function setStep(i){
+  if(!steps.length)return;
+  cur=Math.max(0,Math.min(steps.length-1,i|0));
+  document.getElementById("scrub").value=cur+1;
+  segEls.forEach((el,idx)=>el.classList.toggle("cur",idx===cur));
+  const s=steps[cur];
+  document.getElementById("stepReadout").textContent=
+    "step "+(cur+1)+"/"+steps.length+"  "+(s.kind||"");
+  setCaption(s.tool?(s.kind+": "+s.tool):(s.kind||""));
+  particles=[];sparkles=[];
+  renderDetail();
+}
+function play(){
+  if(!steps.length)return;
+  if(cur>=steps.length-1)setStep(0);
+  playing=true;lastTick=performance.now();
+  document.getElementById("btnPlay").textContent="pause";
+}
+function pause(){
+  playing=false;
+  document.getElementById("btnPlay").textContent="play";
+}
+function togglePlay(){if(playing)pause();else play();}
+
+// ---- stage drawing ----
+function roundRect(c,x,y,w,h,r){
+  c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);
+  c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();
+}
+function line(x1,y1,x2,y2){sx.beginPath();sx.moveTo(x1,y1);sx.lineTo(x2,y2);sx.stroke();}
+function drawThought(x,y){
+  const dots=".".repeat(1+Math.floor(frame/18)%3);
+  sx.fillStyle="#0e2236";sx.strokeStyle="#5fd0ff";sx.lineWidth=1;sx.globalAlpha=.85;
+  sx.beginPath();sx.arc(x+4,y+2,2,0,Math.PI*2);sx.fill();sx.stroke();
+  sx.beginPath();sx.arc(x+8,y-2,3,0,Math.PI*2);sx.fill();sx.stroke();
+  roundRect(sx,x-14,y-20,28,14,5);sx.fill();sx.stroke();
+  sx.globalAlpha=1;
+  sx.fillStyle="#5fd0ff";sx.font="9px ui-monospace, monospace";
+  sx.textAlign="center";sx.textBaseline="middle";
+  sx.fillText(dots,x,y-13);
+}
+function drawSiren(x,y){
+  const pulse=Math.abs(Math.sin(frame*0.25));
+  sx.fillStyle="rgba(255,40,40,"+(0.15+pulse*0.25)+")";
+  sx.beginPath();sx.arc(x,y,14+pulse*5,0,Math.PI*2);sx.fill();
+  sx.fillStyle=pulse>0.5?"#ff5050":"#b81818";
+  sx.strokeStyle="#ffcaca";sx.lineWidth=1.5;
+  sx.beginPath();sx.arc(x,y,6,Math.PI,0);
+  sx.lineTo(x+5,y+2);sx.lineTo(x-5,y+2);sx.closePath();sx.fill();sx.stroke();
+}
+function drawCheck(x,y){
+  sx.strokeStyle="#6fcf7f";sx.lineWidth=2.5;
+  sx.beginPath();sx.moveTo(x-5,y);sx.lineTo(x-1,y+4);sx.lineTo(x+6,y-5);sx.stroke();
+}
+function drawFigure(cx,cy,kind,col){
+  const R=13,headR=7;
+  const bob=(kind==="think")?Math.sin(frame*0.06)*3:(kind==="done"?Math.sin(frame*0.14)*2:0);
+  sx.save();
+  sx.translate(cx,cy+bob);
+  if(kind==="error")sx.rotate(0.22);
+  // legs
+  sx.strokeStyle=col;sx.lineWidth=2;sx.globalAlpha=0.7;
+  const swing=kind==="tool"?Math.sin(frame*0.2)*2:0;
+  line(0,R,-3-swing,R+7);line(0,R,3+swing,R+7);
+  sx.globalAlpha=1;
+  // body
+  sx.fillStyle="#0e2236";sx.strokeStyle=col;sx.lineWidth=1.8;
+  roundRect(sx,-R,-R,R*2,R*2,4);sx.fill();sx.stroke();
+  // arms: wave for tool, hang for error
+  const wave=kind==="tool"?Math.sin(frame*0.3)*6:0;
+  const droop=kind==="error"?7:0;
+  line(-R,0,-R-5,-wave+droop);line(R,0,R+5,wave+droop);
+  // head
+  const hy=-R-headR-2;
+  sx.beginPath();sx.arc(0,hy,headR,0,Math.PI*2);sx.fill();sx.stroke();
+  // eyes (x-eyes on error)
+  if(kind==="error"){
+    sx.lineWidth=1.2;
+    line(-3.5,hy-2,-1.5,hy);line(-1.5,hy-2,-3.5,hy);
+    line(1.5,hy-2,3.5,hy);line(3.5,hy-2,1.5,hy);
+  }else{
+    sx.fillStyle=col;
+    sx.beginPath();sx.arc(-2.5,hy-1,1.3,0,Math.PI*2);sx.fill();
+    sx.beginPath();sx.arc(2.5,hy-1,1.3,0,Math.PI*2);sx.fill();
+  }
+  // overlays above head
+  if(kind==="think")drawThought(6,hy-headR-6);
+  else if(kind==="tripwire")drawSiren(0,hy-headR-10);
+  else if(kind==="done")drawCheck(0,hy-headR-8);
+  sx.restore();
+}
+function drawStage(){
+  frame++;
+  const w=stage.width,h=stage.height;
+  sx.fillStyle="#070d17";sx.fillRect(0,0,w,h);
+  // faint tile grid, same vibe as the facility floor
+  sx.strokeStyle="#0e2236";sx.lineWidth=0.5;sx.globalAlpha=0.5;
+  for(let x=0;x<w;x+=28){sx.beginPath();sx.moveTo(x,0);sx.lineTo(x,h);sx.stroke();}
+  for(let y=0;y<h;y+=28){sx.beginPath();sx.moveTo(0,y);sx.lineTo(w,y);sx.stroke();}
+  sx.globalAlpha=1;
+  const s=steps[cur]||{};
+  const kind=s.kind||"think";
+  const col=kindColor(kind);
+  const cx=w/2,cy=h*0.62;
+  // tripwire: whole stage flashes red
+  if(kind==="tripwire"){
+    const p=Math.abs(Math.sin(frame*0.15));
+    sx.fillStyle="rgba(255,30,30,"+(0.06+0.16*p)+")";
+    sx.fillRect(0,0,w,h);
+  }
+  drawFigure(cx,cy,kind,col);
+  // spawn particles
+  if(kind==="tool"&&Math.random()<0.3)
+    particles.push({x:cx+(Math.random()-0.5)*22,y:cy-4,vx:(Math.random()-0.5)*2,
+      vy:-1-Math.random()*2,life:1,color:Math.random()<0.5?"#5fd0ff":"#fff"});
+  if(kind==="done"&&frame%5===0){
+    const a=Math.random()*Math.PI*2;
+    sparkles.push({x:cx,y:cy-16,vx:Math.cos(a)*(1+Math.random()*2),
+      vy:Math.sin(a)*(1+Math.random()*2),life:1,r:2+Math.random()*2,
+      color:Math.random()<0.5?"#6fcf7f":"#a0ffc0"});
+  }
+  particles=particles.slice(-50).filter(p=>{
+    p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.life-=0.05;return p.life>0;});
+  for(const p of particles){
+    sx.globalAlpha=p.life;sx.fillStyle=p.color;
+    sx.beginPath();sx.arc(p.x,p.y,1.6,0,Math.PI*2);sx.fill();}
+  sparkles=sparkles.slice(-40).filter(p=>{
+    p.x+=p.vx;p.y+=p.vy;p.vy+=0.05;p.life-=0.03;return p.life>0;});
+  for(const p of sparkles){
+    sx.globalAlpha=p.life;sx.fillStyle=p.color;
+    sx.beginPath();sx.arc(p.x,p.y,p.r*p.life,0,Math.PI*2);sx.fill();}
+  sx.globalAlpha=1;
+}
+function loop(t){
+  if(playing&&t-lastTick>=800/speed){
+    lastTick=t;
+    if(cur<steps.length-1)setStep(cur+1);
+    else pause();
+  }
+  drawStage();
+  updateCaption();
+  requestAnimationFrame(loop);
+}
+
+async function initViewer(){
+  document.getElementById("viewer").classList.add("on");
+  document.getElementById("hdrAgent").textContent=agentId;
+  try{
+    const j=await(await fetch("/replay/data?agent="+encodeURIComponent(agentId))).json();
+    steps=j.steps||[];
+  }catch(e){
+    document.getElementById("detailBody").textContent="error loading run: "+String(e);
+    return;
+  }
+  if(!steps.length){
+    document.getElementById("detailBody").textContent="no steps recorded for this run.";
+    document.getElementById("hdrSteps").textContent="0 steps";
+    return;
+  }
+  const n=steps.length;
+  document.getElementById("hdrSteps").textContent=n+" steps";
+  let total=Date.parse(steps[n-1].ts)-Date.parse(steps[0].ts);
+  if(!isFinite(total)||total<0)total=steps.reduce((a,s)=>a+(s.duration_ms||0),0);
+  document.getElementById("hdrDur").textContent=fmtDur(total);
+  // segmented bar, one slice per step, colored by kind
+  const bar=document.getElementById("segBar");
+  bar.innerHTML="";
+  segEls=steps.map((s,i)=>{
+    const d=document.createElement("div");
+    d.className="seg";
+    d.style.background=kindColor(s.kind);
+    d.title="step "+(i+1)+": "+(s.kind||"?")+(s.tool?" "+s.tool:"");
+    d.onclick=()=>{pause();setStep(i);};
+    bar.appendChild(d);
+    return d;
+  });
+  const scrub=document.getElementById("scrub");
+  scrub.max=n;
+  scrub.addEventListener("input",()=>{pause();setStep(scrub.value-1);});
+  document.getElementById("btnPlay").onclick=togglePlay;
+  document.getElementById("btnPrev").onclick=()=>{pause();setStep(cur-1);};
+  document.getElementById("btnNext").onclick=()=>{pause();setStep(cur+1);};
+  document.getElementById("btnSpeed").onclick=()=>{
+    speed=speed>=4?1:speed*2;
+    document.getElementById("btnSpeed").textContent=speed+"x";
+  };
+  document.addEventListener("keydown",e=>{
+    if(e.target&&(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA"||e.target.tagName==="SELECT"))return;
+    if(e.key==="ArrowLeft"){pause();setStep(cur-1);e.preventDefault();}
+    else if(e.key==="ArrowRight"){pause();setStep(cur+1);e.preventDefault();}
+    else if(e.key===" "){togglePlay();e.preventDefault();}
+  });
+  setStep(0);
+  requestAnimationFrame(loop);
+}
+
+if(agentId)initViewer();else initPicker();
+</script></body></html>

@@ -3,6 +3,26 @@
 All notable changes to hearth. Versions follow semantic versioning; each is a
 git tag and a GitHub release.
 
+## v1.3.0 - Replay
+
+A flight recorder for every run, a scrubber to replay it, and a side-by-side
+run diff across two models.
+
+- **Flight recorder**: every run now records a structured per-step event stream
+  to a new `run_steps` table in the audit DB. Each step carries its sequence,
+  kind (`think` / `tool` / `tripwire` / `done` / `error`), tool name, args,
+  output, duration, and the permission verdict. Written best-effort by the agent
+  loop, so recording never fails a run; `HEARTH_RECORDER=off` disables it. Args
+  are truncated to 2000 characters, outputs to 4000.
+- **Replay viewer**: `GET /replay` lets you pick a past run, drag a scrubber
+  timeline through its steps, and watch a sprite act out each step on a mini
+  stage. Every tool call's args, output, duration, and verdict are inspectable.
+  New endpoints `GET /replay/agents` and `GET /replay/data?agent=<id>`.
+- **Run diff**: `POST /diff` runs the same prompt against two local models and
+  returns tokens, latency, and output side by side; a cockpit card renders it.
+  Both sides are recorded to the audit log under agent name `diff`.
+- **Cockpit**: new replay and run-diff cards in `/command`.
+
 ## v1.2.0 - Tripwire
 
 Honeyfile decoys that catch an agent reaching for credentials, rendered as a

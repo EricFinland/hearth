@@ -25,6 +25,12 @@ The schema lives in one place (the runner, `agent/hearth_agent.py`) so the
 database and the records never drift. The `hearth-audit-init` service calls
 `hearth-agent --init-db` on boot to create the schema.
 
+Since v1.3 there is also a per-step layer: a flight recorder writes every step
+of a run (each tool call with its args, output, duration, and permission
+verdict) to a `run_steps` table in the same database, and a replay viewer lets
+you scrub through any past run. See
+[Replay & the flight recorder](/hearth/operations/replay/).
+
 ## Querying runs
 
 `hearth-runs` reads the SQLite store and prints the most recent runs with their

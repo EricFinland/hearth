@@ -3,14 +3,15 @@
 <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>hearth command</title>
 <style>
-  #worldLink {
+  #worldLink, #replayLink {
     position: fixed; top: 10px; right: 14px; z-index: 100;
     font-size: 10px; color: #8a93a0; text-decoration: none;
     font-family: ui-monospace, Menlo, Consolas, monospace;
     border: 1px solid #16324f; padding: 2px 8px; border-radius: 6px;
     background: rgba(5,8,15,0.7);
   }
-  #worldLink:hover { color: #5fd0ff; border-color: #5fd0ff; }
+  #replayLink { right: 76px; }
+  #worldLink:hover, #replayLink:hover { color: #5fd0ff; border-color: #5fd0ff; }
 </style>
 <style>
   :root { color-scheme: dark; }
@@ -42,6 +43,7 @@
 </style></head>
 <body>
 <canvas id="bg"></canvas>
+<a id="replayLink" href="/replay">replay</a>
 <a id="worldLink" href="/world">world</a>
 <div id="grid">
   <div class="card" id="stats"><div class="title">system</div><div id="statsBody">loading...</div></div>
@@ -121,6 +123,23 @@
     </div>
     <textarea id="scGoal" placeholder="mission goal (what should it do each run?)" style="width:100%;height:42px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;box-sizing:border-box;margin-bottom:6px;"></textarea>
     <div id="schedBody" style="font-size:12px;"></div>
+  </div>
+  <div class="card" id="replay" style="grid-column:1/3;">
+    <div class="title" style="display:flex;justify-content:space-between;align-items:center;">
+      <span>replay</span>
+      <a href="/replay" style="font-size:10px;color:#8a93a0;text-decoration:none;border:1px solid #16324f;padding:1px 8px;border-radius:6px;text-transform:none;letter-spacing:normal;">open replay</a>
+    </div>
+    <div id="replayBody" style="font-size:12px;">loading...</div>
+  </div>
+  <div class="card" id="diff" style="grid-column:1/3;">
+    <div class="title">run diff</div>
+    <textarea id="diffPrompt" placeholder="one prompt, two models, side by side..." style="width:100%;height:42px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;box-sizing:border-box;margin-bottom:6px;"></textarea>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+      <select id="diffModelA" style="flex:1;min-width:120px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;"></select>
+      <select id="diffModelB" style="flex:1;min-width:120px;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:5px;border-radius:6px;"></select>
+      <button id="diffRun" style="background:#5fd0ff;color:#04150c;border:0;border-radius:6px;padding:5px 14px;cursor:pointer;">diff</button>
+    </div>
+    <div id="diffBody" style="font-size:12px;"></div>
   </div>
 </div>
 <script>
@@ -437,4 +456,65 @@ document.getElementById("scAdd").onclick=async()=>{
   else alert("error: "+(j.error||"failed"));
 };
 setInterval(refreshSched,5000); refreshSched();
+
+// ---- replay: recent recorded runs ----
+function relTime(ts){
+  if(!ts)return "";
+  const t=Date.parse(ts); if(isNaN(t))return String(ts);
+  const s=Math.max(0,(Date.now()-t)/1000);
+  if(s<60)return Math.round(s)+"s ago";
+  if(s<3600)return Math.round(s/60)+"m ago";
+  if(s<86400)return Math.round(s/3600)+"h ago";
+  return Math.round(s/86400)+"d ago";
+}
+async function refreshReplay(){
+  try{
+    const j=await(await fetch("/replay/agents")).json();
+    const list=(j.agents||[]).slice(0,8);
+    const dotCol=k=>k==="done"?"#6fcf7f":(k==="error"||k==="tripwire")?"#e06a6a":"#f0a030";
+    document.getElementById("replayBody").innerHTML=list.length?list.map(a=>
+      `<a href="/replay?agent=${encodeURIComponent(a.agent_id)}" style="display:flex;align-items:center;gap:8px;color:#cfe6ff;text-decoration:none;border-left:3px solid #16324f;padding:3px 8px;margin:3px 0;">
+        <span style="color:${dotCol(a.last_kind)}">&#9679;</span>
+        <b>${esc(a.agent_id)}</b>
+        <small style="color:#8a93a0">${a.steps|0} steps &middot; ${esc(a.last_kind||"")} &middot; ${esc(relTime(a.last_ts))}</small>
+      </a>`).join(""):"<small style='color:#8a93a0'>no recorded runs yet</small>";
+  }catch(e){}
+}
+setInterval(refreshReplay,5000); refreshReplay();
+
+// ---- run diff: one prompt, two models, side by side ----
+async function loadDiffModels(){
+  try{
+    const j=await(await fetch("/models")).json();
+    const opts=(j.models||[]).map(n=>`<option>${esc(n)}</option>`).join("")||"<option>llama3.2:3b</option>";
+    document.getElementById("diffModelA").innerHTML=opts;
+    const sb=document.getElementById("diffModelB");
+    sb.innerHTML=opts;
+    if(sb.options.length>1)sb.selectedIndex=1;
+  }catch(e){}
+}
+loadDiffModels();
+document.getElementById("diffRun").onclick=async()=>{
+  const prompt=document.getElementById("diffPrompt").value.trim();
+  const body=document.getElementById("diffBody");
+  if(!prompt){body.innerHTML="<small style='color:#e06a6a'>enter a prompt</small>";return;}
+  const btn=document.getElementById("diffRun");
+  btn.disabled=true;btn.textContent="running...";
+  body.innerHTML="<small style='color:#8a93a0'>running both models...</small>";
+  try{
+    const r=await fetch("/diff",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({prompt,
+        model_a:document.getElementById("diffModelA").value,
+        model_b:document.getElementById("diffModelB").value})});
+    const j=await r.json();
+    const side=x=>x&&!x.error?
+      `<div style="flex:1;min-width:220px;border:1px solid #16324f;border-radius:6px;padding:6px;">
+        <div style="color:#5fd0ff;margin-bottom:4px;"><b>${esc(x.model)}</b> <small style="color:#8a93a0">${x.tokens|0} tok &middot; ${x.latency_ms|0} ms</small></div>
+        <pre style="white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;margin:0;color:#9fb6cc;">${esc(x.output||"")}</pre>
+      </div>`:
+      `<div style="flex:1;min-width:220px;border:1px solid #5a2a2a;border-radius:6px;padding:6px;color:#e06a6a;">${esc((x&&x.error)||"no result")}</div>`;
+    body.innerHTML=`<div style="display:flex;gap:8px;flex-wrap:wrap;">${side(j.a)}${side(j.b)}</div>`;
+  }catch(e){body.innerHTML=`<small style='color:#e06a6a'>error: ${esc(String(e))}</small>`;}
+  btn.disabled=false;btn.textContent="diff";
+};
 </script></body></html>

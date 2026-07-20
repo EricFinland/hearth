@@ -77,6 +77,7 @@ export default defineConfig({
             { label: 'World view', link: '/operations/world-view/' },
             { label: 'Command center', link: '/operations/command-center/' },
             { label: 'Standing missions', link: '/operations/scheduler/' },
+            { label: 'Replay & flight recorder', link: '/operations/replay/' },
             { label: 'Map dashboard', link: '/operations/map-dashboard/' },
             { label: 'Demo', link: '/operations/demo/' },
           ],

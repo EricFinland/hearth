@@ -393,6 +393,62 @@ def read_tripwires(db, limit=100):
         return []
 
 
+# Step-by-step run log written by the agent loop; defined here too so the
+# replay endpoints work even before any instrumented run has happened.
+REPLAY_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS run_steps (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "agent_id TEXT, ts TEXT, seq INTEGER, kind TEXT, tool TEXT, args TEXT, "
+    "output TEXT, duration_ms INTEGER, verdict TEXT)")
+
+
+def read_replay_agents(db, limit=50):
+    """Distinct agents in the step log, newest activity first, with step and
+    tool counts plus the kind of the final step (done/error/tripwire) so the
+    replay picker can show how each run ended."""
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.execute(REPLAY_SCHEMA)
+        cur = con.execute(
+            "SELECT agent_id, COUNT(*), "
+            "COALESCE(SUM(CASE WHEN kind='tool' THEN 1 ELSE 0 END),0), "
+            "MIN(ts), MAX(ts) FROM run_steps GROUP BY agent_id "
+            "ORDER BY MAX(ts) DESC LIMIT ?", (limit,))
+        rows = []
+        for r in cur.fetchall():
+            last = con.execute(
+                "SELECT kind FROM run_steps WHERE agent_id=? ORDER BY seq DESC LIMIT 1",
+                (r[0],)).fetchone()
+            rows.append({"agent_id": r[0], "steps": r[1], "tools": r[2],
+                         "first_ts": r[3], "last_ts": r[4],
+                         "last_kind": (last[0] if last else "") or ""})
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
+def read_replay_steps(db, agent, limit=2000):
+    """Every recorded step for one agent, in execution order, for the replay
+    timeline."""
+    if not os.path.exists(db):
+        return []
+    try:
+        con = sqlite3.connect(db, timeout=10)
+        con.execute(REPLAY_SCHEMA)
+        cur = con.execute(
+            "SELECT seq, ts, kind, tool, args, output, duration_ms, verdict "
+            "FROM run_steps WHERE agent_id=? ORDER BY seq ASC LIMIT ?",
+            (agent, limit))
+        cols = ["seq", "ts", "kind", "tool", "args", "output", "duration_ms", "verdict"]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        con.close()
+        return rows
+    except sqlite3.Error:
+        return []
+
+
 def _table_exists(con, name):
     try:
         return con.execute(
@@ -890,6 +946,34 @@ def chat_once(base_url, model, messages, timeout=300):
     return reply, int(data.get("prompt_eval_count", 0) or 0), int(data.get("eval_count", 0) or 0)
 
 
+def run_diff(db, prompt, model_a, model_b, chat_fn=None, base_url=None):
+    """Run one prompt against two models sequentially, timing each, and record
+    both turns to the audit log under the 'diff' agent. A failed side carries an
+    error instead of an output; the other side still answers. chat_fn is
+    injectable for tests (defaults to the real Ollama call)."""
+    if chat_fn is None:
+        chat_fn = chat_once
+    if base_url is None:
+        base_url = OLLAMA_URL
+    messages = [{"role": "user", "content": prompt}]
+    out = {"prompt": prompt}
+    for key, model in (("a", model_a), ("b", model_b)):
+        t0 = time.monotonic()
+        error, reply, tin, tout = None, "", 0, 0
+        try:
+            reply, tin, tout = chat_fn(base_url, model, messages)
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            error = "{}: {}".format(type(exc).__name__, exc)
+        latency = int((time.monotonic() - t0) * 1000)
+        _record_chat_run(db, "diff", model, tin, tout, latency, error)
+        if error:
+            out[key] = {"model": model, "error": error}
+        else:
+            out[key] = {"model": model, "output": reply,
+                        "tokens": tin + tout, "latency_ms": latency}
+    return out
+
+
 def chat_stream(base_url, model, messages, timeout=300):
     """Yield (content_delta, done, prompt_tokens, eval_tokens) from Ollama's
     streaming chat, so the OpenAI endpoint can forward real tokens as they arrive."""
@@ -1111,6 +1195,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/tripwires":
             return self._send(200, json.dumps({"tripwires": read_tripwires(self.db)}),
                               "application/json")
+        if path == "/replay":
+            return self._serve_static("replay.html", "text/html; charset=utf-8")
+        if path == "/replay/agents":
+            return self._send(200, json.dumps({"agents": read_replay_agents(self.db)}),
+                              "application/json")
+        if path == "/replay/data":
+            qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            agent = (qs.get("agent") or [""])[0]
+            if not agent:
+                return self._send(400, json.dumps({"error": "agent required"}),
+                                  "application/json")
+            return self._send(200, json.dumps({"agent": agent,
+                                               "steps": read_replay_steps(self.db, agent)}),
+                              "application/json")
         if path == "/metrics":
             return self._send(200, prometheus_metrics(self.db), "text/plain; version=0.0.4; charset=utf-8")
         parts = path.strip("/").split("/")
@@ -1160,6 +1258,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"ok": ok, "detail": detail}), "application/json")
         if path in ("/v1/chat/completions", "/chat/completions"):
             return self._handle_openai_chat()
+        if path == "/diff":
+            return self._handle_diff()
         if path == "/schedule":
             mid, err = schedule_add(self._read_json_body())
             return self._send(200 if mid else 400, json.dumps({"id": mid, "error": err}), "application/json")
@@ -1188,6 +1288,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, json.dumps({"reply": reply, "error": error,
                                     "tokens_in": tin, "tokens_out": tout}),
                    "application/json")
+
+    def _handle_diff(self):
+        """A/B one prompt across two local models and return both answers with
+        timing, so the cockpit can compare models side by side."""
+        req = self._read_json_body()
+        prompt = req.get("prompt") or ""
+        model_a = req.get("model_a") or ""
+        model_b = req.get("model_b") or ""
+        if not prompt or not model_a or not model_b:
+            return self._send(400, json.dumps(
+                {"error": "prompt, model_a and model_b required"}), "application/json")
+        return self._send(200, json.dumps(run_diff(self.db, prompt, model_a, model_b)),
+                          "application/json")
 
     def _handle_openai_chat(self):
         """OpenAI-compatible /v1/chat/completions: any OpenAI client can point at
@@ -1593,6 +1706,83 @@ def _self_test():
     senv2 = _session_env()
     for k in ("HEARTH_ALLOWED_CREDS", "HEARTH_ALLOWED_TOOLS", "HEARTH_ALLOWED_HOSTS"):
         assert senv2.get(k) == os.environ.get(k), "empty scoping must not add " + k
+
+    # --- replay: seed run_steps for two agents and read the log back, both
+    # through the readers and through the live HTTP endpoints.
+    rdb = os.path.join(tempfile.mkdtemp(prefix="hearth-replay-"), "r.db")
+    con = sqlite3.connect(rdb)
+    con.execute(REPLAY_SCHEMA)
+    con.executemany(
+        "INSERT INTO run_steps (agent_id, ts, seq, kind, tool, args, output, duration_ms, verdict) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        [("agent-old", "2026-07-18T00:00:00", 1, "think", "", "", "planning", 5, ""),
+         ("agent-old", "2026-07-18T00:00:01", 2, "tool", "read_file", "{}", "ok", 12, "allow"),
+         ("agent-old", "2026-07-18T00:00:02", 3, "done", "", "", "finished", 1, ""),
+         ("agent-new", "2026-07-19T00:00:00", 1, "think", "", "", "hmm", 4, ""),
+         ("agent-new", "2026-07-19T00:00:01", 2, "tool", "run_command", '{"cmd":"ls"}', "listing", 30, "gate:allow"),
+         ("agent-new", "2026-07-19T00:00:02", 3, "error", "", "", "boom", 2, "")])
+    con.commit(); con.close()
+    ra = read_replay_agents(rdb)
+    assert [a["agent_id"] for a in ra] == ["agent-new", "agent-old"], ra  # last_ts desc
+    assert ra[0]["steps"] == 3 and ra[0]["tools"] == 1 and ra[0]["last_kind"] == "error", ra
+    assert ra[1]["last_kind"] == "done" and ra[1]["first_ts"] == "2026-07-18T00:00:00", ra
+    assert ra[1]["last_ts"] == "2026-07-18T00:00:02", ra
+    rs = read_replay_steps(rdb, "agent-old")
+    assert [s["seq"] for s in rs] == [1, 2, 3], rs  # seq asc
+    assert rs[1]["tool"] == "read_file" and rs[1]["verdict"] == "allow", rs
+    assert set(rs[0]) == {"seq", "ts", "kind", "tool", "args", "output", "duration_ms", "verdict"}, rs
+    assert read_replay_steps(rdb, "nobody") == []
+    assert read_replay_agents(os.path.join(tempfile.mkdtemp(prefix="hearth-nodb-"), "x.db")) == []
+
+    # /diff engine with an injected chat fn (no Ollama needed): both sides run,
+    # a failed side carries an error, and both turns land in the audit log.
+    def _fake_chat(url, model, messages):
+        if model == "bad":
+            raise OSError("connect refused")
+        return "reply from " + model, 3, 4
+    d = run_diff(rdb, "compare this", "m-a", "m-b", chat_fn=_fake_chat)
+    assert d["prompt"] == "compare this", d
+    assert d["a"]["model"] == "m-a" and d["a"]["output"] == "reply from m-a", d
+    assert d["a"]["tokens"] == 7 and "latency_ms" in d["a"], d
+    assert d["b"]["output"] == "reply from m-b", d
+    d2 = run_diff(rdb, "x", "m-a", "bad", chat_fn=_fake_chat)
+    assert "OSError" in d2["b"].get("error", "") and "output" not in d2["b"], d2
+    assert d2["a"]["output"] == "reply from m-a", d2
+    diff_runs = [r for r in read_runs(rdb) if r["agent_name"] == "diff"]
+    assert len(diff_runs) == 4, diff_runs
+
+    # the same data through the HTTP layer, on an ephemeral local server
+    srv = make_server("127.0.0.1", 0, rdb, DEFAULT_STATIC)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:{}".format(srv.server_address[1])
+    try:
+        with urllib.request.urlopen(base + "/replay/agents", timeout=5) as resp:
+            got = json.loads(resp.read().decode())
+        assert [a["agent_id"] for a in got["agents"]] == ["agent-new", "agent-old"], got
+        with urllib.request.urlopen(base + "/replay/data?agent=agent-new", timeout=5) as resp:
+            got = json.loads(resp.read().decode())
+        assert got["agent"] == "agent-new" and [s["seq"] for s in got["steps"]] == [1, 2, 3], got
+        try:
+            urllib.request.urlopen(base + "/replay/data", timeout=5)
+            raise AssertionError("empty agent param must 400")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400, exc.code
+        # the replay page itself, when the static file has been built
+        if os.path.exists(os.path.join(DEFAULT_STATIC, "replay.html")):
+            with urllib.request.urlopen(base + "/replay", timeout=5) as resp:
+                assert (resp.headers.get("Content-Type") or "").startswith("text/html"), resp.headers
+                assert resp.read(), "replay page should not be empty"
+        # /diff input validation: missing models -> 400
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                base + "/diff", data=json.dumps({"prompt": "hi"}).encode(),
+                headers={"Content-Type": "application/json"}), timeout=5)
+            raise AssertionError("diff without models must 400")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400, exc.code
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
     print("hearth-mapd self-test OK")
     return 0
