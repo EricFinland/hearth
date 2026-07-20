@@ -565,6 +565,41 @@ def read_tools():
         return []
 
 
+def _ensure_agent_path():
+    """Put the agent module directory on sys.path so the agent-side helpers
+    (hearth_router, hearth_askdb, ...) import, matching read_tools()'s lookup:
+    HEARTH_AGENT_DIR first, then the sibling agent/ dir in the repo."""
+    import sys as _sys
+    for d in (os.environ.get("HEARTH_AGENT_DIR", ""),
+              os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agent")):
+        if d and os.path.isdir(d) and d not in _sys.path:
+            _sys.path.insert(0, d)
+
+
+def read_router():
+    """The active router ruleset (hearth_router.load_rules) plus the resolved
+    rules-file path, for GET /router. Best-effort: any import or load failure
+    yields an empty ruleset so the view never crashes."""
+    rpath = os.environ.get("HEARTH_ROUTER", "/etc/hearth/router.json")
+    rules = {"default": "", "rules": []}
+    _ensure_agent_path()
+    try:
+        import hearth_router as _hr
+        loaded = _hr.load_rules(rpath)
+        if isinstance(loaded, dict):
+            rules = loaded
+    except Exception:  # noqa: BLE001 - the router view is a nicety, never a crash
+        pass
+    return {"default": rules.get("default", ""),
+            "rules": rules.get("rules", []), "path": rpath}
+
+
+# Test/inject seam for POST /ask: when {"fn": callable} is set, the /ask handler
+# uses it as the chat_fn instead of building one that calls the local model. Kept
+# a one-key dict so tests can set it without a `global` declaration.
+_ASK_CHAT_HOOK = {"fn": None}
+
+
 def _prom_label(v):
     return str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 
@@ -1282,6 +1317,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps(read_budget(self.db)), "application/json")
         if path == "/tools":
             return self._send(200, json.dumps({"tools": read_tools()}), "application/json")
+        if path == "/router":
+            return self._send(200, json.dumps(read_router()), "application/json")
         if path == "/egress":
             qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             agent = (qs.get("agent") or [""])[0]
@@ -1360,6 +1397,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_openai_chat()
         if path == "/diff":
             return self._handle_diff()
+        if path == "/ask":
+            return self._handle_ask()
         if path == "/schedule":
             mid, err = schedule_add(self._read_json_body())
             return self._send(200 if mid else 400, json.dumps({"id": mid, "error": err}), "application/json")
@@ -1406,6 +1445,37 @@ class Handler(BaseHTTPRequestHandler):
                 {"error": "prompt, model_a and model_b required"}), "application/json")
         return self._send(200, json.dumps(run_diff(self.db, prompt, model_a, model_b)),
                           "application/json")
+
+    def _handle_ask(self):
+        """Plain-English question over the local audit log: hand it to
+        hearth_askdb.ask, which asks a local model for one read-only SELECT,
+        validates it, runs it against the audit db, and summarizes the rows. The
+        model call is injected here (a wrapper over chat_once). May make two model
+        calls, so it can be slow; that is acceptable. Returns ask()'s dict as-is,
+        or 400 on a missing question."""
+        req = self._read_json_body()
+        question = (req.get("question") or "").strip()
+        if not question:
+            return self._send(400, json.dumps({"error": "question required"}), "application/json")
+        _ensure_agent_path()
+        try:
+            import hearth_askdb as _askdb
+        except Exception as exc:  # noqa: BLE001
+            return self._send(500, json.dumps(
+                {"ok": False, "error": "hearth_askdb unavailable: {}".format(exc), "sql": None}),
+                "application/json")
+        chat_fn = _ASK_CHAT_HOOK.get("fn")
+        if chat_fn is None:
+            model = os.environ.get("HEARTH_ASK_MODEL") or ""
+            if not model:
+                avail = read_models()
+                model = avail[0] if avail else "llama3.2:3b"
+
+            def chat_fn(messages):
+                reply, _tin, _tout = chat_once(OLLAMA_URL, model, messages)
+                return reply
+        result = _askdb.ask(question, db=self.db, chat_fn=chat_fn)
+        return self._send(200, json.dumps(result), "application/json")
 
     def _handle_openai_chat(self):
         """OpenAI-compatible /v1/chat/completions: any OpenAI client can point at
@@ -1467,7 +1537,10 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_run(self):
         req = self._read_json_body()
         name = (req.get("name") or "agent").replace("/", "_").replace(" ", "_")[:40] or "agent"
-        model = req.get("model") or "llama3.2:3b"
+        # "auto" (or an empty model) is a valid choice: the agent loop resolves it
+        # via the router at run time, so pass it through unchanged and never force
+        # it to a concrete model here.
+        model = req.get("model") or "auto"
         prompt = req.get("prompt") or ""
         mode = req.get("mode") or "bypass"
         if mode not in ("plan", "auto", "bypass"):
@@ -2052,6 +2125,98 @@ def _self_test():
     finally:
         srv.shutdown()
         srv.server_close()
+
+    # v1.6 "Router": GET /router returns the active ruleset (seeded via a temp
+    # router.json through HEARTH_ROUTER) plus the resolved path; POST /ask routes
+    # to hearth_askdb (400 on a missing question, ok True with sql+summary on the
+    # happy path, driven by an injected chat_fn so no local model is needed).
+    prev_router = os.environ.pop("HEARTH_ROUTER", None)
+    rdir = tempfile.mkdtemp(prefix="hearth-router-")
+    rjson = os.path.join(rdir, "router.json")
+    with open(rjson, "w") as fh:
+        json.dump({"default": "llama3.2:3b",
+                   "rules": [{"name": "code", "any_keywords": ["code", "bug"],
+                              "tools_any": ["edit_file"], "model": "qwen2.5-coder:latest"},
+                             {"name": "no-model", "any_keywords": ["skip"]}]}, fh)
+    # A seeded audit db so /ask has real rows to select over.
+    adb = os.path.join(rdir, "audit.db")
+    con = sqlite3.connect(adb)
+    con.executescript(SCHEMA)
+    con.executemany(
+        "INSERT INTO agent_runs (agent_name, run_id, started_at, finished_at, "
+        "tokens_in, tokens_out, cost_usd, latency_ms, error, model) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [("demo", "r1", "2026-07-19T01:00:00", "2026-07-19T01:00:01", 100, 50, 0, 5, None, "llama3.2:3b"),
+         ("demo", "r2", "2026-07-19T02:00:00", "2026-07-19T02:00:01", 200, 25, 0, 5, None, "qwen2.5-coder:latest")])
+    con.commit(); con.close()
+    try:
+        os.environ["HEARTH_ROUTER"] = rjson
+        # the reader itself: invalid rule (no model) is dropped, path is carried.
+        rr = read_router()
+        assert rr["path"] == rjson and rr["default"] == "llama3.2:3b", rr
+        assert [r["name"] for r in rr["rules"]] == ["code"], rr
+        srv_r = make_server("127.0.0.1", 0, adb, DEFAULT_STATIC)
+        threading.Thread(target=srv_r.serve_forever, daemon=True).start()
+        base_r = "http://127.0.0.1:{}".format(srv_r.server_address[1])
+        try:
+            with urllib.request.urlopen(base_r + "/router", timeout=5) as resp:
+                got = json.loads(resp.read().decode())
+            assert got["path"] == rjson and got["default"] == "llama3.2:3b", got
+            assert [r["name"] for r in got["rules"]] == ["code"], got
+            assert got["rules"][0]["model"] == "qwen2.5-coder:latest", got
+
+            # POST /ask with no question -> 400
+            try:
+                urllib.request.urlopen(urllib.request.Request(
+                    base_r + "/ask", data=json.dumps({"question": "   "}).encode(),
+                    headers={"Content-Type": "application/json"}), timeout=5)
+                raise AssertionError("empty question must 400")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 400, exc.code
+
+            # POST /ask happy path via an injected chat_fn: first call returns the
+            # SQL, second call returns the summary. hermetic (no Ollama).
+            calls = {"n": 0}
+
+            def _fake_ask_chat(messages):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return "SELECT agent_name, model FROM agent_runs ORDER BY id"
+                return "Two runs are recorded, one per model."
+            _ASK_CHAT_HOOK["fn"] = _fake_ask_chat
+            try:
+                with urllib.request.urlopen(urllib.request.Request(
+                        base_r + "/ask", data=json.dumps({"question": "which models ran?"}).encode(),
+                        headers={"Content-Type": "application/json"}), timeout=30) as resp:
+                    got = json.loads(resp.read().decode())
+                assert got.get("ok") is True, got
+                assert got.get("question") == "which models ran?", got
+                assert got.get("sql") == "SELECT agent_name, model FROM agent_runs ORDER BY id", got
+                assert got.get("summary") == "Two runs are recorded, one per model.", got
+                assert [r[0] for r in got.get("rows") or []] == ["demo", "demo"], got
+                assert got.get("columns") == ["agent_name", "model"], got
+                assert calls["n"] == 2, calls  # one call for SQL, one for the summary
+            finally:
+                _ASK_CHAT_HOOK["fn"] = None
+
+            # POST /ask rejects a non-SELECT the model might emit (ok False, db
+            # untouched), proving the request really reaches hearth_askdb.
+            _ASK_CHAT_HOOK["fn"] = lambda messages: "DROP TABLE agent_runs"
+            try:
+                with urllib.request.urlopen(urllib.request.Request(
+                        base_r + "/ask", data=json.dumps({"question": "drop it"}).encode(),
+                        headers={"Content-Type": "application/json"}), timeout=10) as resp:
+                    got = json.loads(resp.read().decode())
+                assert got.get("ok") is False and got.get("sql") == "DROP TABLE agent_runs", got
+            finally:
+                _ASK_CHAT_HOOK["fn"] = None
+        finally:
+            srv_r.shutdown()
+            srv_r.server_close()
+    finally:
+        if prev_router is None:
+            os.environ.pop("HEARTH_ROUTER", None)
+        else:
+            os.environ["HEARTH_ROUTER"] = prev_router
 
     print("hearth-mapd self-test OK")
     return 0

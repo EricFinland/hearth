@@ -3,12 +3,13 @@ title: Roadmap
 description: The staged release plan from v1.2 to v2.0.
 ---
 
-hearth is at **v1.5** (see the [changelog](https://github.com/EricFinland/hearth/blob/main/CHANGELOG.md)
+hearth is at **v1.6** (see the [changelog](https://github.com/EricFinland/hearth/blob/main/CHANGELOG.md)
 and the [status page](/hearth/project/status/)). This page is the staged plan to
 v2.0, sequenced the same way the v0.x line marched to 1.0: each release is one
 coherent story, ships something demoable, and deepens at least one of the three
 guarantees (sandboxed by default, every run audited, reproducible from boot).
-Replay (v1.3), Wall (v1.4), and Governor (v1.5) have shipped; Router is next.
+Replay (v1.3), Wall (v1.4), Governor (v1.5), and Router (v1.6) have shipped;
+Tycoon is next.
 
 Two commitments already made in the changelog land exactly where promised:
 OS-level egress enforcement in v1.4, and auditd raw-open decoy detection in v2.0.

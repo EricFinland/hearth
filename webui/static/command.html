@@ -145,6 +145,18 @@
     </div>
     <div id="diffBody" style="font-size:12px;"></div>
   </div>
+  <div class="card" id="router" style="grid-column:1/3;">
+    <div class="title">router</div>
+    <div id="routerBody" style="font-size:12px;">loading...</div>
+  </div>
+  <div class="card" id="ask" style="grid-column:1/3;">
+    <div class="title">ask the audit log</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <input id="askInput" placeholder="ask about runs, egress, tripwires... (plain English)" style="flex:1;background:#0e2236;border:1px solid #16324f;color:#cfe6ff;padding:6px;border-radius:6px;" />
+      <button id="askBtn" style="background:#5fd0ff;color:#04150c;border:0;border-radius:6px;padding:6px 14px;cursor:pointer;">ask</button>
+    </div>
+    <div id="askBody" style="font-size:12px;"></div>
+  </div>
 </div>
 <script>
 const STATE_ICONS={SPAWNING:"*",IDLE:"z",THINKING:"?",TOOL_CALL:"+",WAITING_IO:"~",WAITING_APPROVAL:"!?",ERRORED:"!",DONE:"#"};
@@ -197,8 +209,13 @@ async function sendChat(){const inp=document.getElementById("chatInput");const t
   }catch(e){appendChat("error",String(e));}}
 document.getElementById("chatSend").onclick=sendChat;
 document.getElementById("chatInput").addEventListener("keydown",e=>{if(e.key==="Enter")sendChat();});
+// "auto (router)" is always the first choice: the run's model is picked by the
+// router at launch time. The local models from /models follow it.
+const AUTO_OPT=`<option value="auto">auto (router)</option>`;
 async function loadAgModels(){try{const j=await(await fetch("/models")).json();
-  document.getElementById("agModel").innerHTML=(j.models||[]).map(n=>`<option>${n}</option>`).join("")||"<option>llama3.2:3b</option>";}catch(e){}}
+  const opts=(j.models||[]).map(n=>`<option>${n}</option>`).join("")||"<option>llama3.2:3b</option>";
+  document.getElementById("agModel").innerHTML=AUTO_OPT+opts;}
+  catch(e){document.getElementById("agModel").innerHTML=AUTO_OPT;}}
 loadAgModels();
 // per-run scoping shared by every launch path: credential allowlist, capability
 // manifest (tools), and egress allowlist (hosts). Empty fields stay unrestricted.
@@ -557,4 +574,58 @@ document.getElementById("diffRun").onclick=async()=>{
   }catch(e){body.innerHTML=`<small style='color:#e06a6a'>error: ${esc(String(e))}</small>`;}
   btn.disabled=false;btn.textContent="diff";
 };
+
+// ---- router: the active routing policy for "auto" launches ----
+async function refreshRouter(){
+  try{
+    const r=await(await fetch("/router")).json();
+    const rules=r.rules||[];
+    let h=`<div style="color:#8a93a0;margin-bottom:6px;">rules from <code style="color:#9fb6cc">${esc(r.path||"")}</code></div>`;
+    if(!rules.length){
+      h+=`<div style="color:#8a93a0;">no routing rules (launches use the chosen model directly)</div>`;
+    }else{
+      h+=rules.map(rl=>{
+        const bits=[];
+        if((rl.any_keywords||[]).length)bits.push("keywords: "+rl.any_keywords.join(", "));
+        if((rl.tools_any||[]).length)bits.push("tools: "+rl.tools_any.join(", "));
+        return `<div style="border-left:3px solid #16324f;padding:3px 8px;margin:3px 0;">
+          <b style="color:#cfe6ff">${esc(rl.name||"rule")}</b> <span style="color:#8a93a0">&rarr;</span> <b style="color:#5fd0ff">${esc(rl.model||"")}</b>
+          ${bits.length?`<div style="color:#8a93a0">${esc(bits.join(" | "))}</div>`:""}
+        </div>`;}).join("");
+    }
+    h+=`<div style="margin-top:6px;color:#9fb6cc;">default model: <b style="color:#6fcf7f">${esc(r.default||"(none)")}</b></div>`;
+    document.getElementById("routerBody").innerHTML=h;
+  }catch(e){}
+}
+setInterval(refreshRouter,15000); refreshRouter();
+
+// ---- ask the audit log: plain-English question -> read-only SQL -> answer ----
+async function askAudit(){
+  const q=document.getElementById("askInput").value.trim();
+  const body=document.getElementById("askBody");
+  if(!q){body.innerHTML="<small style='color:#e06a6a'>enter a question</small>";return;}
+  const btn=document.getElementById("askBtn");
+  btn.disabled=true; btn.textContent="asking...";
+  body.innerHTML="<small style='color:#8a93a0'>asking the audit log (this can take a moment)...</small>";
+  try{
+    const r=await fetch("/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q})});
+    const j=await r.json();
+    if(j.ok===false||(j.ok===undefined&&j.error)){
+      body.innerHTML=`<div style="color:#e06a6a;margin-bottom:4px;">${esc(j.error||"failed")}</div>`+
+        (j.sql?`<code style="display:block;color:#9fb6cc;white-space:pre-wrap;">${esc(j.sql)}</code>`:"");
+    }else{
+      const cols=j.columns||[], rows=j.rows||[];
+      const head=cols.map(c=>`<th style="text-align:left;border-bottom:1px solid #16324f;padding:2px 8px;color:#5fd0ff;white-space:nowrap;">${esc(String(c))}</th>`).join("");
+      const trs=rows.map(rw=>`<tr>${(rw||[]).map(v=>`<td style="padding:2px 8px;border-bottom:1px solid #0e2236;color:#9fb6cc;white-space:nowrap;">${esc(v===null||v===undefined?"":String(v))}</td>`).join("")}</tr>`).join("");
+      body.innerHTML=
+        `<div style="color:#cfe6ff;margin-bottom:6px;">${esc(j.summary||"(no summary)")}</div>`+
+        `<code style="display:block;color:#8a93a0;white-space:pre-wrap;margin-bottom:6px;">${esc(j.sql||"")}</code>`+
+        (j.truncated?`<div style="color:#f0a030;font-size:11px;margin-bottom:4px;">results truncated</div>`:"")+
+        `<div style="max-height:240px;overflow:auto;"><table style="border-collapse:collapse;font-size:11px;"><thead><tr>${head}</tr></thead><tbody>${trs||`<tr><td style="color:#8a93a0;padding:4px 8px;">no rows</td></tr>`}</tbody></table></div>`;
+    }
+  }catch(e){body.innerHTML=`<small style='color:#e06a6a'>error: ${esc(String(e))}</small>`;}
+  btn.disabled=false; btn.textContent="ask";
+}
+document.getElementById("askBtn").onclick=askAudit;
+document.getElementById("askInput").addEventListener("keydown",e=>{if(e.key==="Enter")askAudit();});
 </script></body></html>

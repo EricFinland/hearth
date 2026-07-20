@@ -3,6 +3,33 @@
 All notable changes to hearth. Versions follow semantic versioning; each is a
 git tag and a GitHub release.
 
+## v1.6.0 - Router
+
+Rule-based model selection declared in the flake, so the right local model runs
+each launch, and a way to ask the audit log questions in plain English. hearth
+starts choosing its own brains, and eats its own dog food.
+
+- **Declarative model router**: `hearth.router` in the flake takes a default
+  model and an ordered list of rules; each rule matches on `any_keywords`
+  (a substring in the goal) or `tools`, and names a model. It renders to
+  `/etc/hearth/router.json` (env `HEARTH_ROUTER`). A launch whose model is
+  `auto` is resolved by the agent loop at run time: the first matching rule
+  wins, else the default, else the caller's fallback. The routing decision is
+  emitted as an event and lands in the run's flight recorder (the v1.3
+  recorder), so replay shows why a given model ran. A cockpit "router" card
+  shows the
+  active policy, `GET /router` exposes it, and the launch model picker gains an
+  "auto (router)" option.
+- **Natural-language audit query**: ask the local audit database questions in
+  plain English. `POST /ask {question}` sends the question to a local model,
+  which translates it into a single read-only `SELECT`. The generated SQL is
+  validated (single statement, `SELECT` only, only the audit tables, no
+  writes/attach/pragma, an enforced `LIMIT`) and run against a read-only
+  connection, then the model summarizes the rows. A cockpit "ask the audit log"
+  card shows the summary, the generated SQL, and the result rows. All local,
+  zero cloud. Implemented in `agent/hearth_askdb.py`, with the safety
+  validation as the core guarantee.
+
 ## v1.5.0 - Governor
 
 A hard daily token budget with a circuit breaker, unified push alerting, and

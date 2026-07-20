@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hearth_budget  # noqa: E402
 import hearth_notify  # noqa: E402
+import hearth_router  # noqa: E402
 import hearth_tools  # noqa: E402
 import permissions  # noqa: E402
 try:
@@ -618,6 +619,37 @@ def _recalled_context(db, goal, kb_limit=3, mem_limit=3):
     return "\n\n".join(parts)
 
 
+def _resolve_auto_model(model, goal, allowed_tools, emit, db, agent_name):
+    """When a run is launched with model 'auto' (or no model), consult the hearth
+    router to pick a concrete model for this goal and toolset, so a replay shows
+    which model ran and why. Emits one route event and records a think step in the
+    flight recorder. Best-effort: any router failure keeps the fallback default.
+    Returns the resolved model name (the caller's model unchanged when not 'auto')."""
+    if model and str(model).lower() != "auto":
+        return model
+    fallback = os.environ.get("HEARTH_DEFAULT_MODEL") or "llama3.2:3b"
+    chosen = fallback
+    why = "router unavailable; used default"
+    try:
+        rules = hearth_router.load_rules()
+        picked = hearth_router.choose_model(goal, tools=allowed_tools, rules=rules,
+                                            fallback=fallback)
+        if picked:
+            chosen = picked
+        why = hearth_router.explain(goal, allowed_tools, rules).get("why") or why
+    except Exception:  # noqa: BLE001 - a router failure must never break the run
+        chosen = fallback
+        why = "router unavailable; used default"
+    try:
+        emit({"type": "route", "model": chosen, "why": why})
+    except Exception:  # noqa: BLE001
+        pass
+    if os.environ.get("HEARTH_RECORDER", "on").lower() != "off":
+        _record_step(db, agent_name, 0, "think", "", "",
+                     "routed model 'auto' -> {} ({})".format(chosen, why), 0, "route")
+    return chosen
+
+
 def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
              ollama_url=DEFAULT_OLLAMA, max_iters=MAX_ITERS, chat_fn=None,
              mode="auto", auto_allow=(), emit_fn=None, control_fn=None, recall=True,
@@ -628,10 +660,13 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
     falls back to HEARTH_ALLOWED_TOOLS from the environment (the spawn path)."""
     if allowed_tools is None:
         allowed_tools = _env_manifest()
-    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs,
-                                            hearth_tools.ollama_tool_specs(allowed_tools)))
     emit = emit_fn or _stdout_emit
     control = control_fn or _stdin_control
+    # resolve model "auto" via the router before the first model call, so the
+    # chat_fn closure and the audit row both use the model actually chosen.
+    model = _resolve_auto_model(model, goal, allowed_tools, emit, db, agent_name)
+    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs,
+                                            hearth_tools.ollama_tool_specs(allowed_tools)))
     os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
     notified = {}
     st = _budget_breach(db)
@@ -678,10 +713,14 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
     Ends on stop or EOF. Conversation context persists across messages."""
     if allowed_tools is None:
         allowed_tools = _env_manifest()
-    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs,
-                                            hearth_tools.ollama_tool_specs(allowed_tools)))
     emit = emit_fn or _stdout_emit
     control = control_fn or _stdin_control
+    # resolve model "auto" via the router before the first model call, so the
+    # chat_fn closure and the audit row both use the model actually chosen. A
+    # session has no upfront goal text, so route on the granted tools alone.
+    model = _resolve_auto_model(model, "", allowed_tools, emit, db, agent_name)
+    chat_fn = chat_fn or (lambda msgs: chat(ollama_url, model, msgs,
+                                            hearth_tools.ollama_tool_specs(allowed_tools)))
     os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
     notified = {}
     st = _budget_breach(db)
@@ -1177,6 +1216,59 @@ def _self_test():
             os.environ.pop("HEARTH_NOTIFY_DONE", None)
         else:
             os.environ["HEARTH_NOTIFY_DONE"] = saved_done
+
+    # --- Model router: an "auto" launch with a router.json that maps a "python"
+    # keyword to a specific model resolves to that model, emits a route event, and
+    # records it on the audit row; an explicit model is left untouched (no route).
+    rdir = tempfile.mkdtemp(prefix="hearth-loop-router-")
+    rcfg = os.path.join(rdir, "router.json")
+    with open(rcfg, "w") as fh:
+        json.dump({"default": "llama3.2:3b",
+                   "rules": [{"name": "code",
+                              "any_keywords": ["python", "refactor"],
+                              "model": "qwen2.5-coder:latest"}]}, fh)
+    saved_router_default = hearth_router.DEFAULT_RULES
+    saved_router_env = os.environ.pop("HEARTH_ROUTER", None)
+    try:
+        os.environ["HEARTH_ROUTER"] = rcfg
+        # load_rules() reads its default path, frozen at import; point it here too
+        hearth_router.DEFAULT_RULES = rcfg
+        wsrt = tempfile.mkdtemp(prefix="hearth-loop-auto-")
+        dbrt = os.path.join(wsrt, "d.db")
+        ev_rt = []
+        rtsteps = iter([({"role": "assistant", "content": "done"}, 1)])
+        frt, ert = run_loop("write a python function", "auto", wsrt, db=dbrt,
+                            agent_name="route-auto", chat_fn=lambda m: next(rtsteps),
+                            emit_fn=ev_rt.append, control_fn=lambda req: {"type": "stop"})
+        assert ert is None, ert
+        assert any(e["type"] == "route" and e["model"] == "qwen2.5-coder:latest"
+                   for e in ev_rt), ev_rt
+        con = sqlite3.connect(dbrt)
+        rmodel = con.execute(
+            "SELECT model FROM agent_runs WHERE agent_name='route-auto'").fetchone()
+        con.close()
+        assert rmodel and rmodel[0] == "qwen2.5-coder:latest", rmodel
+        # an explicit model is recorded unchanged; the router is not consulted
+        wsre = tempfile.mkdtemp(prefix="hearth-loop-explicit-")
+        dbre = os.path.join(wsre, "d.db")
+        ev_re = []
+        resteps = iter([({"role": "assistant", "content": "done"}, 1)])
+        fre, ere = run_loop("write a python function", "mock", wsre, db=dbre,
+                            agent_name="route-explicit", chat_fn=lambda m: next(resteps),
+                            emit_fn=ev_re.append, control_fn=lambda req: {"type": "stop"})
+        assert ere is None, ere
+        assert not any(e["type"] == "route" for e in ev_re), ev_re
+        con = sqlite3.connect(dbre)
+        emodel = con.execute(
+            "SELECT model FROM agent_runs WHERE agent_name='route-explicit'").fetchone()
+        con.close()
+        assert emodel and emodel[0] == "mock", emodel
+    finally:
+        hearth_router.DEFAULT_RULES = saved_router_default
+        if saved_router_env is None:
+            os.environ.pop("HEARTH_ROUTER", None)
+        else:
+            os.environ["HEARTH_ROUTER"] = saved_router_env
 
     print("hearth-loop self-test OK:", final)
     return 0

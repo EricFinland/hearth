@@ -79,6 +79,7 @@ export default defineConfig({
             { label: 'Standing missions', link: '/operations/scheduler/' },
             { label: 'Replay & flight recorder', link: '/operations/replay/' },
             { label: 'Governor (budget & alerts)', link: '/operations/governor/' },
+            { label: 'Model router', link: '/operations/router/' },
             { label: 'Map dashboard', link: '/operations/map-dashboard/' },
             { label: 'Demo', link: '/operations/demo/' },
           ],

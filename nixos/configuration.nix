@@ -22,6 +22,7 @@
     ./modules/tripwire.nix
     ./modules/egress.nix
     ./modules/governor.nix
+    ./modules/router.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this
