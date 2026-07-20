@@ -15,9 +15,9 @@ repository.
 Please do not open a public issue for a security problem. Instead:
 
 - Open a private report through GitHub Security Advisories ("Report a
-  vulnerability" on the repository's Security tab), or
-- Email **eric.catalano925@gmail.com** with details and, if possible, a
-  reproduction.
+  vulnerability" on the repository's Security tab), the preferred channel, or
+- Reach out through the [contact form](https://ericcatalano.dev/#contact) with
+  details and, if possible, a reproduction.
 
 You will get an acknowledgement, and once a fix ships the advisory will credit
 you unless you ask otherwise.

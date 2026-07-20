@@ -17,6 +17,29 @@ hero:
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
+## New on hearth
+
+The latest shipped releases. See the [changelog](https://github.com/EricFinland/hearth/blob/main/CHANGELOG.md)
+for the full history and the [roadmap](/hearth/project/roadmap/) for what is next.
+
+<CardGrid>
+  <LinkCard
+    title="v1.5 Governor: budget breaker + alerts + cron-as-flake"
+    description="A hard daily token budget that halts runaway agents, unified Telegram and ntfy alerting, and standing missions you declare in the flake."
+    href="/hearth/operations/governor/"
+  />
+  <LinkCard
+    title="v1.4 Wall: OS-level egress enforcement"
+    description="Per-run nftables rules keyed on the run's cgroup. Loopback, DNS, and declared hosts are allowed; everything else is dropped at the kernel and logged."
+    href="/hearth/concepts/per-run-containment/"
+  />
+  <LinkCard
+    title="v1.3 Replay: flight recorder + run diff"
+    description="Every run records a per-step event stream. Scrub through any past run in the browser, and compare two models on one prompt side by side."
+    href="/hearth/operations/replay/"
+  />
+</CardGrid>
+
 ## Get started
 
 <CardGrid>

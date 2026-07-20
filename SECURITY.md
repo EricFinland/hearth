@@ -10,9 +10,9 @@ known sharp edges, and how to report a problem.
 Please do not open a public issue for a security problem.
 
 - Open a private report via GitHub Security Advisories ("Report a vulnerability"
-  on the Security tab), or
-- Email eric.catalano925@gmail.com with details and, if possible, a way to
-  reproduce.
+  on the Security tab). This is the preferred channel, or
+- Reach out through the contact form at https://ericcatalano.dev/#contact with
+  details and, if possible, a way to reproduce.
 
 You will get an acknowledgement, and once a fix is out the advisory will credit
 you unless you ask otherwise.

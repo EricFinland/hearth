@@ -25,7 +25,7 @@ Most people run local agents with full system privileges and no record of what t
 
 > It is not a custom kernel or a remastered distro. It is a declarative NixOS system you `nixos-rebuild switch` into existence.
 
-> **Status: v1.0, stable.** The whole stack runs on real hardware: sandboxed agents, the audit log, the reproducible flake, the web cockpit, an OpenAI-compatible API, a local knowledge base, a standing-missions scheduler, and the self-improvement loop (which only ever produces reviewable, gated branches, never auto-changing a running system). Local model quality is the honest ceiling. See the [CHANGELOG](CHANGELOG.md).
+> **Status: v1.5, stable.** The whole stack runs on real hardware: sandboxed agents, the audit log, the reproducible flake, the web cockpit, an OpenAI-compatible API, a local knowledge base, a standing-missions scheduler, and the self-improvement loop (which only ever produces reviewable, gated branches, never auto-changing a running system). Since 1.0, per-run containment (tool and host allowlists, with hosts enforced at the kernel), honeyfile tripwires, a flight recorder with a replay viewer, and a governor (a daily spend breaker plus push alerts) have landed on top. Local model quality is the honest ceiling. See the [CHANGELOG](CHANGELOG.md).
 
 ## What makes it different
 
@@ -134,6 +134,12 @@ curl http://your-hearth:8770/metrics
 - **Knowledge base (RAG):** ingest docs or a whole repo (`index_dir`), semantic retrieval via local embeddings with lexical fallback, auto-recalled into agent context.
 - **Standing missions:** a scheduler that runs missions on a cadence (the works-while-you-sleep layer).
 - **Self-improvement loop:** an always-on daemon proposes changes to hearth's own config, validates them with `nix flake check`, compounds and learns, and produces reviewable branches with one-click promote-to-live and an auto-rollback watchdog.
+- **OS-level egress enforcement:** when a run declares its allowed hosts, hearth programs per-run nftables walls that drop everything else at the kernel, so a run cannot slip the tool-layer allowlist by shelling out to `curl`.
+- **Flight recorder and replay viewer:** every run records a structured per-step event stream; a scrubber replays it step by step, with each tool call's args, output, duration, and permission verdict inspectable.
+- **Run diff:** `POST /diff` runs the same prompt against two local models and returns tokens, latency, and output side by side, so "which model for this?" is a live test, not a guess.
+- **Spend circuit breaker:** a hard daily token budget across all runs; at the cap, running agents halt gracefully and new runs refuse to start until local midnight.
+- **Unified alerting:** one fan-out pushes every alert to Telegram and ntfy, firing on errors, tripwire trips, and budget breaches so the box can reach your phone.
+- **Declarative missions:** scheduled cron-as-flake missions you define in the flake, rendered read-only and merged with cockpit-created ones, each launch carrying its capability manifest and egress allowlist.
 - **Observability:** a Prometheus `/metrics` endpoint, a usage-over-time stats view, and `hearth-doctor` for a one-command health check.
 - **Agent credentials by name:** keys are substituted at request time via systemd credentials, so the model never sees the secret value.
 - **More agent tools:** grep, multi-file edit, directory tree, web-to-knowledge, and more.

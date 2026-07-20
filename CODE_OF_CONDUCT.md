@@ -24,8 +24,9 @@ discussions, and to anyone representing the project in public.
 
 ## Enforcement
 
-Report unacceptable behavior to eric.catalano925@gmail.com. Reports will be
-reviewed and handled confidentially. The maintainer may remove comments,
-commits, or contributors that violate this code.
+Report unacceptable behavior through the contact form at
+https://ericcatalano.dev/#contact. Reports will be reviewed and handled
+confidentially. The maintainer may remove comments, commits, or contributors
+that violate this code.
 
 This is a lightweight adaptation of the spirit of the Contributor Covenant.
