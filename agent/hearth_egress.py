@@ -70,16 +70,58 @@ def _default_resolve(host):
     return addrs
 
 
-def build_ruleset(run_id, addrs):
+def default_cgroup(run_id):
+    """The cgroup path nft should match for a run, relative to the cgroupv2
+    root (no leading slash). systemd places a templated unit under an
+    auto-generated per-template slice, so the real path has an intermediate
+    component: system.slice/system-hearth\\x2dagent.slice/hearth-agent@<id>.service.
+    resolve_cgroup() queries systemd for the live path; this is the fallback
+    when that query is unavailable (for example under --dry-run off-target)."""
+    return ("system.slice/system-hearth\\x2dagent.slice/"
+            "hearth-agent@{}.service".format(run_id))
+
+
+def resolve_cgroup(run_id, show_fn=None):
+    """Ask systemd for the run unit's actual ControlGroup, so the nft match
+    tracks whatever slice layout systemd chose rather than a hardcoded guess.
+    Returns the path with the leading slash stripped, or the default when the
+    unit is not known yet. show_fn is injectable for tests."""
+    unit = "hearth-agent@{}.service".format(run_id)
+    if show_fn is None:
+        def show_fn(u):
+            try:
+                p = subprocess.run(
+                    ["systemctl", "show", u, "-p", "ControlGroup", "--value"],
+                    capture_output=True, text=True, timeout=10)
+                return p.stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                return ""
+    path = (show_fn(unit) or "").strip()
+    if not path:
+        return default_cgroup(run_id)
+    return path.lstrip("/")
+
+
+def _cgroup_level(cgroup):
+    """nftables socket cgroupv2 matches an ancestor at a given level, counted
+    from the cgroupv2 root (root is 0, so the first path component is 1). The
+    leaf service therefore sits at a level equal to its component count."""
+    return len([c for c in cgroup.split("/") if c])
+
+
+def build_ruleset(run_id, addrs, cgroup=None):
     """Render the per-run nft ruleset as text for `nft -f -`.
 
     `add table` / `add chain` are idempotent, and only the run's own chain is
     flushed, so re-applying one run never disturbs another's rules. Traffic
     from the run's cgroup jumps to its chain: loopback, DNS, and each resolved
     address are accepted; anything else is logged (with a parseable prefix the
-    `watch` subcommand knows) and dropped."""
+    `watch` subcommand knows) and dropped. cgroup is the run unit's real
+    cgroupv2 path (see resolve_cgroup); it defaults to the standard layout."""
     chain = "run_" + sanitize_id(run_id)
-    cgroup = "system.slice/hearth-agent@{}.service".format(run_id)
+    if cgroup is None:
+        cgroup = default_cgroup(run_id)
+    level = _cgroup_level(cgroup)
     lines = [
         "add table inet hearth",
         "add chain inet hearth output "
@@ -97,15 +139,18 @@ def build_ruleset(run_id, addrs):
         lines.append("add rule inet hearth {} {} daddr {} accept".format(chain, fam, addr))
     lines.append('add rule inet hearth {} log prefix "{} {} " counter drop'.format(
         chain, LOG_PREFIX, run_id))
-    lines.append('add rule inet hearth output socket cgroupv2 level 2 "{}" jump {}'.format(
-        cgroup, chain))
+    lines.append('add rule inet hearth output socket cgroupv2 level {} "{}" jump {}'.format(
+        level, cgroup, chain))
     return "\n".join(lines) + "\n"
 
 
-def apply_rules(run_id, hosts_csv, dry_run=False, resolve_fn=None, nft_fn=None):
+def apply_rules(run_id, hosts_csv, dry_run=False, resolve_fn=None, nft_fn=None,
+                cgroup_fn=None):
     """Resolve the allowed hosts and load the per-run ruleset. Empty hosts_csv
     keeps tool-layer semantics (no allowlist means allow-all): nothing is
-    applied. --dry-run prints the generated ruleset instead of loading it."""
+    applied. --dry-run prints the generated ruleset instead of loading it.
+    cgroup_fn resolves the run unit's real cgroupv2 path (injectable for tests
+    and skipped under --dry-run, which uses the default layout)."""
     hosts = [h.strip() for h in (hosts_csv or "").split(",") if h.strip()]
     if not hosts:
         print("no allowed hosts for {}: allow-all, no rules applied".format(run_id))
@@ -120,7 +165,13 @@ def apply_rules(run_id, hosts_csv, dry_run=False, resolve_fn=None, nft_fn=None):
         for addr in got:
             if addr not in addrs:
                 addrs.append(addr)
-    ruleset = build_ruleset(run_id, addrs)
+    if dry_run:
+        cgroup = default_cgroup(run_id)
+    elif cgroup_fn is not None:
+        cgroup = cgroup_fn(run_id)
+    else:
+        cgroup = resolve_cgroup(run_id)
+    ruleset = build_ruleset(run_id, addrs, cgroup=cgroup)
     if dry_run:
         print(ruleset, end="")
         return 0
@@ -258,8 +309,9 @@ def _self_test():
            "{ type filter hook output priority filter ; policy accept ; }" in rs
     assert "add chain inet hearth run_net_7_x" in rs, "sanitized chain name"
     assert "flush chain inet hearth run_net_7_x" in rs, "only own chain flushed"
-    assert 'socket cgroupv2 level 2 "system.slice/hearth-agent@net-7.x.service" ' \
-           "jump run_net_7_x" in rs, "cgroup match keeps the raw run id"
+    assert 'socket cgroupv2 level 3 "system.slice/system-hearth\\x2dagent.slice/' \
+           'hearth-agent@net-7.x.service" jump run_net_7_x' in rs, \
+           "dry-run uses the default 3-level slice path and matching level"
     assert 'run_net_7_x oif "lo" accept' in rs
     assert "run_net_7_x ip daddr 127.0.0.0/8 accept" in rs
     assert "run_net_7_x ip6 daddr ::1 accept" in rs
@@ -273,6 +325,24 @@ def _self_test():
     lines = [ln for ln in rs.splitlines() if ln]
     assert "counter drop" in lines[-2], "drop is the run chain's last rule"
     assert lines[-1].startswith("add rule inet hearth output "), "jump added last"
+
+    # cgroup resolution: a live ControlGroup drives the match path and level;
+    # an unknown unit falls back to the default layout.
+    assert _cgroup_level("system.slice/system-hearth\\x2dagent.slice/x.service") == 3
+    assert _cgroup_level("/a/b/") == 2
+    resolved = resolve_cgroup(
+        "run9",
+        show_fn=lambda u: "/system.slice/system-hearth\\x2dagent.slice/"
+                          "hearth-agent@run9.service")
+    assert resolved.startswith("system.slice/"), "leading slash stripped"
+    assert resolve_cgroup("run9", show_fn=lambda u: "") == default_cgroup("run9")
+    buf_cg = io.StringIO()
+    with contextlib.redirect_stdout(buf_cg):
+        apply_rules("run9", "example.com", dry_run=True, resolve_fn=fake_resolve)
+    # a real (deeper) cgroup injected at apply time flows into the rule level
+    rs_cg = build_ruleset("run9", ["1.2.3.4"],
+                          cgroup="a/b/c/d/hearth-agent@run9.service")
+    assert 'socket cgroupv2 level 5 "a/b/c/d/hearth-agent@run9.service"' in rs_cg
 
     # empty hosts: allow-all, nft never invoked
     calls = []
