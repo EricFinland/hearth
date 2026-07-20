@@ -64,6 +64,27 @@ v2.0 need it to exist), and it is an instant demo.
 - **System Bill of Materials page.** Every package, model, and module with its
   pinned hash, auto-generated from the flake. Legibility as spectacle.
 
+## v1.8 "Witness" (two projects, one story)
+
+[witness](https://github.com/EricFinland/witness) is local-first observability
+for browser agents: per-step DOM diffs, before-and-after screenshots, and every
+LLM call with tokens, cost, and latency, all stored locally with zero
+telemetry. hearth contains the agent; witness shows exactly what it did. Same
+philosophy, one narrative.
+
+- **`hearth.witness.enable`.** A first-class NixOS module that ships witness
+  declaratively: the viewer served on the box, storage under
+  `/var/lib/hearth/witness`, browser agents on the host recorded automatically.
+- **Audit deep links.** The audit row for a browser-agent run links to its
+  witness trace, so the cockpit receipt opens straight into the DOM-diff
+  replay.
+- **Cross-promotion.** A "hearth + witness" docs page here, and witness
+  documents hearth as its natural home. Both repos advertise a real
+  integration, not just words.
+
+The v1.3 flight recorder treats witness's replay UX as its north star, so the
+two recorders feel like siblings from day one.
+
 ## v2.0 "Sentinel" (the promise, kept)
 
 The v2.0 headline: **contained, and provable.**
