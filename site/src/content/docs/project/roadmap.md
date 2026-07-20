@@ -85,6 +85,26 @@ philosophy, one narrative.
 The v1.3 flight recorder treats witness's replay UX as its north star, so the
 two recorders feel like siblings from day one.
 
+## v1.9 "Scholar" (deep research, audited)
+
+Local deep research built from pieces hearth already has: a research agent
+takes a question, fans out searches and fetches through the egress allowlist,
+pulls sources into the knowledge base, cross-checks claims, and synthesizes a
+cited report with a local model.
+
+What makes it hearth and not another deep-research clone: every source fetch is
+in the egress log, every step is in the audit trail and the flight recorder,
+and it runs as a standing mission, so a research brief is waiting for you at
+7am. Deep research you can audit.
+
+- **Research pipeline.** Plan, search, fetch, verify, synthesize, cite. Uses
+  the swarm for parallel source reading and the model router for cheap
+  fetching versus careful synthesis.
+- **Cited reports.** Every claim links to a source chunk in the knowledge base;
+  the report lists what was fetched, from where, at what cost.
+- **Cockpit surface.** Launch a research question from the cockpit, watch the
+  fan-out on the map, read the report when it lands.
+
 ## v2.0 "Sentinel" (the promise, kept)
 
 The v2.0 headline: **contained, and provable.**
@@ -99,6 +119,14 @@ The v2.0 headline: **contained, and provable.**
 - **hearth-doctor report card v2.** One command that live-probes every
   guarantee (sandbox escape attempts, an egress block, a tripwire trip, an
   audit write, a signed-export verify) and prints a green/red report card.
+
+## Beyond v2.0
+
+- **v2.1 "Vision" (candidate).** Multimodal agents: local vision models via
+  Ollama so agents can read screenshots, charts, and PDFs, and the knowledge
+  base becomes multimodal. Pairs with v1.8: a vision model analyzing witness's
+  before-and-after screenshots to explain why a browser agent failed. Sized for
+  small vision models on modest VRAM.
 
 ## Backlog
 

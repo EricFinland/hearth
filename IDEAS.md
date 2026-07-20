@@ -40,6 +40,12 @@ are rough gut calls to help sequencing.
 - **Boot attestation.** TPM-measured boot plus a dashboard panel that says
   "this system matches commit abc123." Effort: high. Impact: medium.
 
+## ML and evals
+
+- **Eval arena.** Grow run diff into a local benchmark harness: run your models
+  against your own task suite, score with a local LLM judge, leaderboard in the
+  cockpit. Effort: medium. Impact: medium.
+
 ## Other agent capabilities
 
 - **Local tool server.** A set of safe, audited tools agents can call (file read
