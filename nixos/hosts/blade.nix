@@ -42,6 +42,28 @@
   # that are due (the "works while you sleep" layer).
   hearth.schedule.enable = true;
 
+  # The egress wall (v1.4): runs that declare allowed_hosts get per-run
+  # nftables chains at the kernel, and blocked connections land in the audit
+  # log via the watch bridge.
+  hearth.egress.enable = true;
+
+  # The governor (v1.5): a hard daily token budget across all runs. 500k
+  # tokens is roomy for a day of missions on local models but stops a
+  # runaway overnight loop dead.
+  hearth.governor.enable = true;
+  hearth.governor.dailyTokenCap = 500000;
+
+  # A declarative standing mission (cron-as-flake, v1.5): a small daily pulse
+  # that exercises the whole governed pipeline: capability manifest (only the
+  # listed tools), scheduler, audit, and flight recorder.
+  hearth.schedule.missions.daily-pulse = {
+    schedule = "07:30";
+    model = "llama3.2:3b";
+    kind = "agent";
+    prompt = "Write a short morning status note to pulse.md: today's date, one line about what a healthy hearth box looks like, and one improvement idea for a local agent system. Keep it under 10 lines.";
+    tools = [ "write_file" "read_file" "list_tree" ];
+  };
+
   home-manager.useGlobalPkgs = true;
   home-manager.useUserPackages = true;
   home-manager.users.operator = import ../home/operator.nix;
