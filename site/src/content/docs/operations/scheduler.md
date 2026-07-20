@@ -81,6 +81,66 @@ hearth-schedule --list   # show all missions and when each last ran
 hearth-schedule --tick   # dispatch any due missions right now
 ```
 
+## Declarative missions (since v1.5)
+
+Missions you actually rely on deserve to live in the flake with the rest of
+the system, not only in a JSON file the cockpit edits. As of v1.5 you can
+declare missions as NixOS options, and they become part of the reproducible
+system definition: rebuild the box anywhere and the same missions run.
+
+```nix
+hearth.schedule.missions = {
+  morning-brief = {
+    schedule = "07:00";  # once per day, local time
+    prompt = "Read overnight audit activity and my notes, and write a short morning brief.";
+    model = "default";
+    kind = "agent";
+    tools = [ "read_file" "kb_search" "write_file" ];
+    allowedHosts = [ "news.ycombinator.com" ];
+  };
+
+  inbox-sweep = {
+    schedule = "every:30";  # roughly every 30 minutes
+    prompt = "Check for new items and triage anything urgent.";
+    model = "default";
+    kind = "agent";
+    enabled = true;
+  };
+};
+```
+
+A `schedule` is either `"HH:MM"` (once per day at that local time) or
+`"every:N"` (roughly every N minutes). Each mission also takes `prompt`,
+`model`, `kind`, optional `tools` and `allowedHosts`, optional `creds`
+(credentials granted by name), and `enabled`.
+
+### How it renders
+
+The option set renders to `/etc/hearth/missions.json` at rebuild. On each
+tick, the scheduler merges these "nix" missions with the cockpit-created ones
+from the registry and treats the merged set as one schedule. Last-run state
+for nix missions is kept in a sidecar file under the scheduler's state
+directory, never in `/etc/hearth/missions.json` itself, so the rendered file
+stays pure config: rebuilding produces the same file every time, and the
+scheduler still knows what already ran.
+
+### Containment rides along
+
+`tools` and `allowedHosts` are not decoration. Every launch of a nix mission
+carries them as its [capability manifest and egress allowlist](/hearth/concepts/per-run-containment/),
+composing the v1.1 manifests and the v1.4 OS-level wall. The
+`morning-brief` mission above can use only its three listed tools and can
+reach only `news.ycombinator.com` (and subdomains), enforced at the tool layer
+and, where the egress module is on, at the kernel.
+
+### In the cockpit
+
+Nix missions show up in the standing missions panel alongside the rest, marked
+with a `nix` tag. They are read-only there: the source of truth is your flake,
+so `POST /schedule/<id>/toggle` and `POST /schedule/<id>/delete` return 400
+for a nix mission. To pause one, set `enabled = false` and rebuild; to change
+one, edit the flake. Cockpit-created missions keep working exactly as before.
+
 ## Examples
 
 ### A daily 9am marathon

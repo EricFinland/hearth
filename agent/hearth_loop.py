@@ -2,7 +2,10 @@
 """hearth agent loop: give the model a goal and tools; it thinks, calls tools,
 reads results, and repeats until done (or hits the iteration cap). Uses Ollama's
 chat tool-calling. Emits runtime state per step (for the live map) and records
-the run. Standard library only.
+the run. A daily token budget (hearth_budget, HEARTH_DAILY_TOKEN_CAP) pauses
+runs at the cap, and operator alerts fan out through hearth_notify (budget,
+tripwire, error, and opt-in done via HEARTH_NOTIFY_DONE=on). Standard library
+only.
 
 Usage:
   hearth-loop --model qwen2.5-coder --agent-name builder --workspace DIR "GOAL"
@@ -21,6 +24,8 @@ import uuid
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import hearth_budget  # noqa: E402
+import hearth_notify  # noqa: E402
 import hearth_tools  # noqa: E402
 import permissions  # noqa: E402
 try:
@@ -68,6 +73,9 @@ CREATE TABLE IF NOT EXISTS run_steps (
 
 MAX_STEP_ARGS = 2000  # cap recorded tool args per step
 MAX_STEP_OUT = 4000  # cap recorded output per step
+
+# audit-row error written when the daily token budget circuit breaker fires
+BUDGET_ERROR = "budget: daily token cap reached"
 
 SYSTEM_PROMPT = (
     "You are a capable agent working in a sandboxed workspace. You have tools to "
@@ -310,12 +318,65 @@ def _record_step(db, agent_id, seq, kind, tool, args, output, duration_ms, verdi
         pass
 
 
-def _notify_tripwire(agent_name, detail):
-    """DM the operator that a tripwire fired, if Telegram creds are configured.
-    Dormant (no-op) until creds exist, mirroring the growth daemon's notifier."""
+def _budget_breach(db):
+    """Return the daily budget status when today's token spend has reached the
+    cap, else None. Cheap when no cap is configured: no db read at all."""
     try:
-        import hearth_grow
-        hearth_grow._default_notifier()("hearth tripwire: {} ({})".format(agent_name, detail))
+        if hearth_budget.cap() <= 0:
+            return None
+        st = hearth_budget.check(db)
+        return st if st.get("capped") else None
+    except Exception:  # noqa: BLE001 - budget bookkeeping must never break the run
+        return None
+
+
+def _budget_prestep(db, agent_name):
+    """A one-row step recorder for a run halted before its turn loop starts
+    (the turn loop owns its own step sequence once it is running)."""
+    def step(kind, tool, args, output, duration_ms, verdict):
+        if os.environ.get("HEARTH_RECORDER", "on").lower() != "off":
+            _record_step(db, agent_name, 1, kind, tool, args, output,
+                         duration_ms, verdict)
+    return step
+
+
+def _budget_halt(st, emit, step_fn, notified, agent_name):
+    """Announce a daily-token-cap breach: a budget event, a flight-recorder
+    error row, and at most one operator alert per run (notified is the run's
+    shared guard dict). Best-effort throughout."""
+    detail = "daily token cap reached ({}/{})".format(st["tokens"], st["cap"])
+    emit({"type": "budget", "tokens": st["tokens"], "cap": st["cap"],
+          "detail": detail})
+    step_fn("error", "", "", detail, 0, "")
+    if not notified.get("budget"):
+        notified["budget"] = True
+        try:
+            hearth_notify.notify(
+                "budget", "agent {} paused: daily token cap reached ({}/{})".format(
+                    agent_name, st["tokens"], st["cap"]))
+        except Exception:  # noqa: BLE001 - alerting must never break the run
+            pass
+
+
+def _notify_run_end(agent_name, error):
+    """Alert the operator at run end. An errored run always notifies, except a
+    budget halt (the breaker already sent its own alert); a clean finish
+    notifies only when HEARTH_NOTIFY_DONE=on. Best-effort."""
+    try:
+        if error:
+            if not error.startswith("budget:"):
+                hearth_notify.notify("error", "agent {} failed: {}".format(agent_name, error))
+        elif os.environ.get("HEARTH_NOTIFY_DONE") == "on":
+            hearth_notify.notify("done", "agent {} finished".format(agent_name))
+    except Exception:  # noqa: BLE001 - alerting must never break the run
+        pass
+
+
+def _notify_tripwire(agent_name, detail):
+    """Alert the operator that a tripwire fired, via every configured channel.
+    Dormant (no-op) until a channel is configured."""
+    try:
+        hearth_notify.notify("tripwire", "{} ({})".format(agent_name, detail))
     except Exception:  # noqa: BLE001 - notification must never break the run
         pass
 
@@ -341,11 +402,15 @@ def _tripwire_hit(tool, cargs, result, decoys, workspace):
 
 
 def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
-               db, agent_name, max_iters, auto_allow, allowed_tools=None, decoys=None):
+               db, agent_name, max_iters, auto_allow, allowed_tools=None, decoys=None,
+               notified=None):
     """Run agent turns until the model stops calling tools, hits the cap, or is
     stopped. state is a mutable dict holding {"mode": ...}. allowed_tools is the
-    run's capability manifest (None = no manifest). Returns
-    (final_text, error, tokens_out)."""
+    run's capability manifest (None = no manifest). notified is a mutable dict
+    shared with the caller so the budget alert fires at most once per run.
+    Returns (final_text, error, tokens_out)."""
+    if notified is None:
+        notified = {}
     tokens_out = 0
     final = ""
     # flight recorder: one run_steps row per model turn / tool call / tripwire,
@@ -360,6 +425,11 @@ def _run_turns(messages, model, workspace, chat_fn, emit, control, state,
             rec_seq[0] += 1
 
     for _ in range(max_iters):
+        # circuit breaker: refuse the next model call once today's spend is capped
+        st = _budget_breach(db)
+        if st is not None:
+            _budget_halt(st, emit, _step, notified, agent_name)
+            return final, BUDGET_ERROR, tokens_out
         emit({"type": "state", "state": "THINKING", "detail": "calling " + model})
         _emit(agent_name, "THINKING", "calling " + model, db)
         t_chat = time.monotonic()
@@ -563,6 +633,15 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
     emit = emit_fn or _stdout_emit
     control = control_fn or _stdin_control
     os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
+    notified = {}
+    st = _budget_breach(db)
+    if st is not None:
+        # circuit breaker: today's spend is already at the cap; refuse to start
+        _budget_halt(st, emit, _budget_prestep(db, agent_name), notified, agent_name)
+        _record(db, agent_name, model, 0, 0, BUDGET_ERROR)
+        _emit(agent_name, "ERRORED", BUDGET_ERROR, db)
+        emit({"type": "done", "error": BUDGET_ERROR, "final": ""})
+        return "", BUDGET_ERROR
     os.makedirs(workspace, exist_ok=True)
     decoys = _plant_decoys_maybe(workspace)
     messages = [{"role": "system", "content": _system_for(mode)}]
@@ -580,9 +659,10 @@ def run_loop(goal, model, workspace, db=DEFAULT_DB, agent_name="agent",
     final, error, tokens_out = _run_turns(messages, model, workspace, chat_fn, emit,
                                           control, state, db, agent_name, max_iters,
                                           auto_allow, allowed_tools=allowed_tools,
-                                          decoys=decoys)
+                                          decoys=decoys, notified=notified)
     latency_ms = int((time.monotonic() - t0) * 1000)
     _record(db, agent_name, model, tokens_out, latency_ms, error)
+    _notify_run_end(agent_name, error)
     final_state = "TRIPPED" if (error or "").startswith("tripwire:") else ("ERRORED" if error else "DONE")
     _emit(agent_name, final_state, error or "task complete", db)
     emit({"type": "done", "error": error, "final": final})
@@ -603,6 +683,15 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
     emit = emit_fn or _stdout_emit
     control = control_fn or _stdin_control
     os.environ["HEARTH_AGENT_ID"] = agent_name  # attribution for the egress log
+    notified = {}
+    st = _budget_breach(db)
+    if st is not None:
+        # circuit breaker: today's spend is already at the cap; refuse to start
+        _budget_halt(st, emit, _budget_prestep(db, agent_name), notified, agent_name)
+        _record(db, agent_name, model, 0, 0, BUDGET_ERROR)
+        _emit(agent_name, "ERRORED", BUDGET_ERROR, db)
+        emit({"type": "done", "error": BUDGET_ERROR, "final": ""})
+        return
     os.makedirs(workspace, exist_ok=True)
     decoys = _plant_decoys_maybe(workspace)
     state = {"mode": mode}
@@ -628,10 +717,17 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
         final, error, tokens_out = _run_turns(messages, model, workspace, chat_fn, emit,
                                                control, state, db, agent_name, max_iters,
                                                auto_allow, allowed_tools=allowed_tools,
-                                               decoys=decoys)
+                                               decoys=decoys, notified=notified)
         latency_ms = int((time.monotonic() - t0) * 1000)
         _record(db, agent_name, model, tokens_out, latency_ms, error)
+        if error:
+            _notify_run_end(agent_name, error)
         emit({"type": "turn_done", "error": error, "final": final})
+        if error == BUDGET_ERROR:
+            # the daily token cap ends the whole session, not just the turn
+            _emit(agent_name, "ERRORED", error, db)
+            emit({"type": "done", "error": error, "final": ""})
+            return
         if (error or "").startswith("tripwire:"):
             # a tripwire ends the whole session, not just the turn; leave the
             # agent in TRIPPED (already emitted by _run_turns) and stop here
@@ -640,6 +736,7 @@ def run_session(model, workspace, db=DEFAULT_DB, agent_name="session",
         _emit(agent_name, "ERRORED" if error else "IDLE", error or "ready", db)
     emit({"type": "done", "error": None, "final": ""})
     _emit(agent_name, "DONE", "session ended", db)
+    _notify_run_end(agent_name, None)
 
 
 def _record(db, agent_name, model, tokens_out, latency_ms, error):
@@ -979,6 +1076,107 @@ def _self_test():
         assert nrows == 0, nrows
     finally:
         os.environ.pop("HEARTH_RECORDER", None)
+
+    # --- Budget breaker: with today's spend pre-seeded over the cap, a run
+    # halts before the first model call, records the budget error on the audit
+    # row, writes a run_steps error row, and sends exactly one budget alert;
+    # with the cap unset the same script completes normally.
+    def _seed_spend(db_path, name, tin, tout):
+        c = sqlite3.connect(db_path)
+        c.execute(
+            "CREATE TABLE IF NOT EXISTS agent_runs (id INTEGER PRIMARY KEY, "
+            "agent_name TEXT, run_id TEXT, started_at TEXT, finished_at TEXT, "
+            "tokens_in INTEGER, tokens_out INTEGER, cost_usd REAL, latency_ms INTEGER, "
+            "error TEXT, model TEXT)")
+        ts = _now_iso()
+        c.execute(
+            "INSERT INTO agent_runs (agent_name, run_id, started_at, finished_at, "
+            "tokens_in, tokens_out, cost_usd, latency_ms, error, model) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (name, uuid.uuid4().hex, ts, ts, tin, tout, 0.0, 1, None, "mock"))
+        c.commit()
+        c.close()
+
+    wsb = tempfile.mkdtemp(prefix="hearth-loopB-")
+    dbb = os.path.join(wsb, "d.db")
+    _seed_spend(dbb, "seed", 400, 200)
+    saved_cap = os.environ.pop("HEARTH_DAILY_TOKEN_CAP", None)
+    saved_done = os.environ.pop("HEARTH_NOTIFY_DONE", None)
+    sent = []
+    real_notify = hearth_notify.notify
+    hearth_notify.notify = lambda kind, text, post_fn=None: sent.append((kind, text)) or 0
+    try:
+        os.environ["HEARTH_DAILY_TOKEN_CAP"] = "100"
+        events_b = []
+        model_calls = []
+
+        def bchat(m):
+            model_calls.append(1)
+            return {"role": "assistant", "content": "should never run"}, 1
+
+        fb, eb = run_loop("noop", "mock", wsb, db=dbb, agent_name="bud",
+                          chat_fn=bchat, emit_fn=events_b.append,
+                          control_fn=lambda req: {"type": "stop"})
+        assert eb == "budget: daily token cap reached", eb
+        assert model_calls == [], "a capped run must not call the model"
+        assert any(e["type"] == "budget" for e in events_b), events_b
+        con = sqlite3.connect(dbb)
+        brun = con.execute("SELECT error FROM agent_runs WHERE agent_name='bud'").fetchone()
+        bsteps = con.execute("SELECT kind, output FROM run_steps WHERE agent_id='bud'").fetchall()
+        con.close()
+        assert brun and brun[0] == "budget: daily token cap reached", brun
+        assert any(k == "error" and "daily token cap reached (600/100)" in (o or "")
+                   for k, o in bsteps), bsteps
+        assert sent == [("budget", "agent bud paused: daily token cap reached (600/100)")], sent
+
+        # mid-run breach: spend crosses the cap between turns (another run
+        # lands); the loop halts before the next model call, alerting once
+        del sent[:]
+        os.environ["HEARTH_DAILY_TOKEN_CAP"] = "1000"
+        wsb2 = tempfile.mkdtemp(prefix="hearth-loopB2-")
+        dbb2 = os.path.join(wsb2, "d.db")
+        events_b2 = []
+
+        def b2chat(m):
+            _seed_spend(dbb2, "other", 5000, 0)  # another run blows the cap
+            return ({"role": "assistant", "tool_calls": [{"function": {"name": "write_file",
+                     "arguments": {"path": "b2.txt", "content": "x"}}}]}, 1)
+
+        fb2, eb2 = run_loop("noop", "mock", wsb2, db=dbb2, agent_name="bud2",
+                            chat_fn=b2chat, emit_fn=events_b2.append,
+                            control_fn=lambda req: {"type": "stop"})
+        assert eb2 == "budget: daily token cap reached", eb2
+        assert len([e for e in events_b2 if e["type"] == "budget"]) == 1, events_b2
+        con = sqlite3.connect(dbb2)
+        brun2 = con.execute("SELECT error FROM agent_runs WHERE agent_name='bud2'").fetchone()
+        con.close()
+        assert brun2 and brun2[0] == "budget: daily token cap reached", brun2
+        assert [s for s in sent if s[0] == "budget"] == [
+            ("budget", "agent bud2 paused: daily token cap reached (5000/1000)")], sent
+        assert not [s for s in sent if s[0] == "error"], ("budget halts alert once", sent)
+
+        # cap unset: the same pre-seeded db no longer blocks; the run completes,
+        # and HEARTH_NOTIFY_DONE=on sends the finish alert
+        os.environ.pop("HEARTH_DAILY_TOKEN_CAP", None)
+        os.environ["HEARTH_NOTIFY_DONE"] = "on"
+        del sent[:]
+        oksteps = iter([({"role": "assistant", "content": "all done"}, 1)])
+        fok, eok = run_loop("noop", "mock", wsb, db=dbb, agent_name="bud-ok",
+                            chat_fn=lambda m: next(oksteps),
+                            emit_fn=lambda e: None,
+                            control_fn=lambda req: {"type": "stop"})
+        assert eok is None and fok == "all done", (fok, eok)
+        assert ("done", "agent bud-ok finished") in sent, sent
+    finally:
+        hearth_notify.notify = real_notify
+        if saved_cap is None:
+            os.environ.pop("HEARTH_DAILY_TOKEN_CAP", None)
+        else:
+            os.environ["HEARTH_DAILY_TOKEN_CAP"] = saved_cap
+        if saved_done is None:
+            os.environ.pop("HEARTH_NOTIFY_DONE", None)
+        else:
+            os.environ["HEARTH_NOTIFY_DONE"] = saved_done
 
     print("hearth-loop self-test OK:", final)
     return 0

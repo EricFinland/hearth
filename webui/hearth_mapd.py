@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DEFAULT_DB = os.environ.get("HEARTH_DB", "/var/lib/hearth/runs/audit.db")
@@ -350,6 +350,35 @@ def read_stats_history(db, days=14):
     }
 
 
+def read_budget(db):
+    """The v1.5 spend circuit breaker as the cockpit sees it: today's token
+    spend (tokens_in + tokens_out over agent_runs, UTC day) against the daily
+    cap from HEARTH_DAILY_TOKEN_CAP. cap 0 or unset means no cap. When the cap
+    is reached the agent loop refuses new runs (recording the error
+    "budget: daily token cap reached"), so capped=True means the breaker is
+    open."""
+    try:
+        cap = int(os.environ.get("HEARTH_DAILY_TOKEN_CAP", "0") or "0")
+    except ValueError:
+        cap = 0
+    tokens = 0
+    runs = 0
+    if os.path.exists(db):
+        try:
+            con = sqlite3.connect(db, timeout=10)
+            con.executescript(SCHEMA)
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            row = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(COALESCE(tokens_in,0)+COALESCE(tokens_out,0)),0) "
+                "FROM agent_runs WHERE substr(started_at,1,10)=?", (day,)).fetchone()
+            runs, tokens = int(row[0]), int(row[1])
+            con.close()
+        except sqlite3.Error:
+            pass
+    return {"cap": cap, "tokens_today": tokens, "runs_today": runs,
+            "remaining": max(0, cap - tokens), "capped": cap > 0 and tokens >= cap}
+
+
 def read_egress(db, agent="", limit=200, blocked=False):
     """Read the egress log (outbound network attempts recorded by the agent
     tools, or by the OS-layer watcher with tool='os'), newest first, optionally
@@ -496,10 +525,16 @@ def read_security(db, is_active_fn=None):
             con.close()
         except sqlite3.Error:
             pass
+    budget = read_budget(db)
     return {
         "remote_auth": bool(API_TOKEN),
         "rate_limit_per_min": RATE_LIMIT,
         "manifests_supported": True,
+        # v1.5 "Governor": the spend circuit breaker and whether an alert
+        # channel is wired up (telegram via env, ntfy via topic).
+        "budget": {"cap": budget["cap"], "capped": budget["capped"]},
+        "alerting": {"telegram_env": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
+                     "ntfy": bool(os.environ.get("HEARTH_NTFY_TOPIC"))},
         # v1.4 "Wall": True when the NixOS module has per-run nftables egress
         # enforcement switched on for this box (env set on the mapd service).
         "egress_os": os.environ.get("HEARTH_EGRESS_OS") == "1",
@@ -717,15 +752,60 @@ def read_growth(db, repo=GROW_REPO, limit=40):
 
 
 SCHEDULE_REGISTRY = "/var/lib/hearth/scheduler/schedule.json"
+DEFAULT_MISSIONS = "/etc/hearth/missions.json"
 
 
-def read_schedule(path=SCHEDULE_REGISTRY):
+def _read_registry(path=SCHEDULE_REGISTRY):
+    """The raw mutable registry file, exactly as stored (no source marks, no
+    declarative entries). The write paths go through this so nix-declared
+    missions can never leak into the registry file."""
     try:
         with open(path) as fh:
             d = json.load(fh)
         return d if isinstance(d, list) else []
     except (OSError, ValueError):
         return []
+
+
+def read_declared_missions(path=None):
+    """Missions declared in the nix config: env HEARTH_MISSIONS points at the
+    JSON list the module writes (default /etc/hearth/missions.json). Entries are
+    shaped like registry missions with id 'nix-{name}' and source 'nix'; the
+    scheduler runs them under the same ids. A missing or invalid file simply
+    means no declared missions."""
+    if path is None:
+        path = os.environ.get("HEARTH_MISSIONS", DEFAULT_MISSIONS)
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(d, list):
+        return []
+    out = []
+    for m in d:
+        if not isinstance(m, dict) or not m.get("name"):
+            continue
+        e = dict(m)
+        e["id"] = "nix-{}".format(m["name"])
+        e["source"] = "nix"
+        e["enabled"] = m.get("enabled", True)
+        e.setdefault("last_run", None)
+        out.append(e)
+    return out
+
+
+def read_schedule(path=SCHEDULE_REGISTRY):
+    """Every standing mission the cockpit should show: the mutable registry
+    (source 'user', editable) followed by the nix-declared missions (source
+    'nix', read-only here; edit the config and rebuild to change them)."""
+    missions = []
+    for m in _read_registry(path):
+        e = dict(m)
+        e["source"] = "user"
+        missions.append(e)
+    missions.extend(read_declared_missions())
+    return missions
 
 
 def write_schedule(missions, path=SCHEDULE_REGISTRY):
@@ -755,14 +835,14 @@ def schedule_add(req, path=SCHEDULE_REGISTRY):
          "goal": goal, "model": req.get("model") or "qwen2.5-coder",
          "mode": req.get("mode") or "bypass", "kind": req.get("kind") or "agent",
          "schedule": sched, "enabled": True, "last_run": None}
-    missions = read_schedule(path)
+    missions = _read_registry(path)
     missions.append(m)
     write_schedule(missions, path)
     return m["id"], ""
 
 
 def schedule_remove(mid, path=SCHEDULE_REGISTRY):
-    missions = read_schedule(path)
+    missions = _read_registry(path)
     kept = [m for m in missions if m.get("id") != mid]
     if len(kept) != len(missions):
         write_schedule(kept, path)
@@ -771,7 +851,7 @@ def schedule_remove(mid, path=SCHEDULE_REGISTRY):
 
 
 def schedule_toggle(mid, path=SCHEDULE_REGISTRY):
-    missions = read_schedule(path)
+    missions = _read_registry(path)
     found = False
     for m in missions:
         if m.get("id") == mid:
@@ -1198,6 +1278,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"missions": read_schedule()}), "application/json")
         if path == "/stats/history":
             return self._send(200, json.dumps(read_stats_history(self.db)), "application/json")
+        if path == "/budget":
+            return self._send(200, json.dumps(read_budget(self.db)), "application/json")
         if path == "/tools":
             return self._send(200, json.dumps({"tools": read_tools()}), "application/json")
         if path == "/egress":
@@ -1283,6 +1365,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200 if mid else 400, json.dumps({"id": mid, "error": err}), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "schedule" and parts[2] in ("delete", "toggle"):
+            # nix-declared missions are read-only here: edit the config and
+            # rebuild instead. Refuse before touching the registry.
+            if parts[1].startswith("nix-"):
+                return self._send(400, json.dumps({"ok": False, "error": "declared in nix"}),
+                                  "application/json")
             ok = (schedule_remove(parts[1]) if parts[2] == "delete" else schedule_toggle(parts[1]))
             return self._send(200, json.dumps({"ok": ok}), "application/json")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "send":
@@ -1649,6 +1736,70 @@ def _self_test():
     assert schedule_toggle(mid, path=sreg) and read_schedule(sreg)[0]["enabled"] is False
     assert schedule_remove(mid, path=sreg) and read_schedule(sreg) == []
 
+    # v1.5 declarative missions: read_schedule appends the nix-declared file
+    # (env HEARTH_MISSIONS) after the registry, with sources marked, and the
+    # write paths never leak nix entries or source marks into the registry file.
+    sreg2 = os.path.join(tempfile.mkdtemp(prefix="hearth-sched2-"), "s.json")
+    decl = os.path.join(tempfile.mkdtemp(prefix="hearth-decl-"), "missions.json")
+    with open(decl, "w") as fh:
+        json.dump([{"name": "nightly-digest", "kind": "agent", "model": "m",
+                    "prompt": "summarize the day", "schedule": {"at": "07:00"},
+                    "enabled": False},
+                   {"kind": "agent"}], fh)  # nameless entry is skipped
+    mid2, err = schedule_add({"name": "usr", "goal": "watch the logs",
+                              "every_minutes": 5}, path=sreg2)
+    assert mid2 and not err, (mid2, err)
+    prev_missions = os.environ.pop("HEARTH_MISSIONS", None)
+    try:
+        os.environ["HEARTH_MISSIONS"] = decl
+        merged = read_schedule(sreg2)
+        assert [m["source"] for m in merged] == ["user", "nix"], merged
+        assert merged[0]["id"] == mid2, merged
+        assert merged[1]["id"] == "nix-nightly-digest" and merged[1]["enabled"] is False, merged
+        assert merged[1]["kind"] == "agent" and merged[1]["schedule"] == {"at": "07:00"}, merged
+        # toggling the user mission must not persist source marks or nix rows
+        assert schedule_toggle(mid2, path=sreg2)
+        with open(sreg2) as fh:
+            raw = json.load(fh)
+        assert len(raw) == 1 and raw[0]["id"] == mid2 and "source" not in raw[0], raw
+        # missing or invalid declarative file = registry only, silently
+        os.environ["HEARTH_MISSIONS"] = decl + ".nope"
+        assert [m["id"] for m in read_schedule(sreg2)] == [mid2]
+        bad = decl + ".bad"
+        with open(bad, "w") as fh:
+            fh.write("not json")
+        os.environ["HEARTH_MISSIONS"] = bad
+        assert [m["id"] for m in read_schedule(sreg2)] == [mid2], "invalid file skipped"
+        os.environ["HEARTH_MISSIONS"] = decl
+        # HTTP layer: /schedule/nix-*/toggle and /delete are refused with 400
+        # before the registry is touched.
+        srv_n = make_server("127.0.0.1", 0, sreg2 + ".db", DEFAULT_STATIC)
+        threading.Thread(target=srv_n.serve_forever, daemon=True).start()
+        base_n = "http://127.0.0.1:{}".format(srv_n.server_address[1])
+        try:
+            for act in ("toggle", "delete"):
+                try:
+                    urllib.request.urlopen(urllib.request.Request(
+                        base_n + "/schedule/nix-nightly-digest/" + act, data=b"{}",
+                        headers={"Content-Type": "application/json"}), timeout=5)
+                    raise AssertionError("nix mission " + act + " must 400")
+                except urllib.error.HTTPError as exc:
+                    assert exc.code == 400, exc.code
+                    got = json.loads(exc.read().decode())
+                    assert got == {"ok": False, "error": "declared in nix"}, got
+            with urllib.request.urlopen(base_n + "/schedule", timeout=5) as resp:
+                got = json.loads(resp.read().decode())
+            nix_rows = [m for m in got["missions"] if m.get("source") == "nix"]
+            assert [m["id"] for m in nix_rows] == ["nix-nightly-digest"], got
+        finally:
+            srv_n.shutdown()
+            srv_n.server_close()
+    finally:
+        if prev_missions is None:
+            os.environ.pop("HEARTH_MISSIONS", None)
+        else:
+            os.environ["HEARTH_MISSIONS"] = prev_missions
+
     # Prometheus metrics: counters + per-model + daemon gauges (daemon injected).
     mtxt = prometheus_metrics(tdb, units=("hearth-grow.service",), is_active_fn=lambda u: True)
     assert "hearth_runs_total" in mtxt and "# TYPE hearth_runs_total counter" in mtxt, mtxt
@@ -1730,6 +1881,69 @@ def _self_test():
             os.environ.pop("HEARTH_EGRESS_OS", None)
         else:
             os.environ["HEARTH_EGRESS_OS"] = prev_os
+
+    # v1.5 budget breaker: today's tokens (UTC day) vs HEARTH_DAILY_TOKEN_CAP,
+    # through the reader, through GET /budget, and onto the security scoreboard.
+    bdb = os.path.join(tempfile.mkdtemp(prefix="hearth-budget-"), "b.db")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    yday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    con = sqlite3.connect(bdb)
+    con.executescript(SCHEMA)
+    con.executemany(
+        "INSERT INTO agent_runs (agent_name, run_id, started_at, finished_at, "
+        "tokens_in, tokens_out, cost_usd, latency_ms, error, model) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [("a", "r-t1", today + "T01:00:00", today + "T01:00:01", 100, 300, 0, 5, None, "m"),
+         ("a", "r-t2", today + "T02:00:00", today + "T02:00:01", 200, 400, 0, 5, None, "m"),
+         ("a", "r-y1", yday + "T01:00:00", yday + "T01:00:01", 5000, 5000, 0, 5, None, "m")])
+    con.commit(); con.close()
+    prev_cap = os.environ.pop("HEARTH_DAILY_TOKEN_CAP", None)
+    prev_tg = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+    prev_nt = os.environ.pop("HEARTH_NTFY_TOPIC", None)
+    try:
+        b = read_budget(bdb)  # cap unset: yesterday's tokens never count
+        assert b == {"cap": 0, "tokens_today": 1000, "runs_today": 2,
+                     "remaining": 0, "capped": False}, b
+        os.environ["HEARTH_DAILY_TOKEN_CAP"] = "5000"
+        b = read_budget(bdb)  # under the cap: breaker armed, not open
+        assert b["cap"] == 5000 and b["tokens_today"] == 1000, b
+        assert b["remaining"] == 4000 and b["capped"] is False, b
+        os.environ["HEARTH_DAILY_TOKEN_CAP"] = "800"
+        b = read_budget(bdb)  # over the cap: breaker open
+        assert b["capped"] is True and b["remaining"] == 0, b
+        os.environ["HEARTH_DAILY_TOKEN_CAP"] = "junk"
+        assert read_budget(bdb)["cap"] == 0, "unparseable cap falls back to no cap"
+        assert read_budget(os.path.join(tempfile.mkdtemp(prefix="hearth-nob-"), "x.db")) == {
+            "cap": 0, "tokens_today": 0, "runs_today": 0, "remaining": 0, "capped": False}
+        # the same shape through the HTTP layer
+        os.environ["HEARTH_DAILY_TOKEN_CAP"] = "800"
+        srv_bg = make_server("127.0.0.1", 0, bdb, DEFAULT_STATIC)
+        threading.Thread(target=srv_bg.serve_forever, daemon=True).start()
+        try:
+            u = "http://127.0.0.1:{}/budget".format(srv_bg.server_address[1])
+            with urllib.request.urlopen(u, timeout=5) as resp:
+                got = json.loads(resp.read().decode())
+            assert got == {"cap": 800, "tokens_today": 1000, "runs_today": 2,
+                           "remaining": 0, "capped": True}, got
+        finally:
+            srv_bg.shutdown()
+            srv_bg.server_close()
+        # security scoreboard: budget + alerting keys flip with the env
+        sec_b = read_security(bdb, is_active_fn=lambda u: False)
+        assert sec_b["budget"] == {"cap": 800, "capped": True}, sec_b
+        assert sec_b["alerting"] == {"telegram_env": False, "ntfy": False}, sec_b
+        os.environ["HEARTH_DAILY_TOKEN_CAP"] = "5000"
+        os.environ["TELEGRAM_BOT_TOKEN"] = "tok"
+        os.environ["HEARTH_NTFY_TOPIC"] = "hearth-alerts"
+        sec_b = read_security(bdb, is_active_fn=lambda u: False)
+        assert sec_b["budget"] == {"cap": 5000, "capped": False}, sec_b
+        assert sec_b["alerting"] == {"telegram_env": True, "ntfy": True}, sec_b
+    finally:
+        for k, v in (("HEARTH_DAILY_TOKEN_CAP", prev_cap),
+                     ("TELEGRAM_BOT_TOKEN", prev_tg), ("HEARTH_NTFY_TOPIC", prev_nt)):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     # and the same filter through the HTTP layer: /egress?blocked=1&limit=5
     # returns only blocked rows (this is what the world HUD polls).

@@ -11,6 +11,13 @@ Schedule forms:
   {"every_minutes": 60}   run roughly every N minutes
   {"at": "09:00"}         run once per day, the first tick at or after HH:MM (local)
 
+Missions come from two places: the mutable registry (schedule.json, edited via
+add_mission and the webui) and an optional read-only declarative file rendered
+by the system configuration (/etc/hearth/missions.json). Declarative missions
+get ids of the form "nix-<name>" and stamp their last-run times in a sidecar
+state file, never in the config itself. On id collision the declarative entry
+wins.
+
 The schedule math is pure and injectable (you pass `now`), so it is fully
 testable with no clock, no systemd, and no Ollama. Standard library only.
 """
@@ -21,11 +28,16 @@ import os
 import subprocess
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Lives in an operator-owned subdir: operator (who runs the scheduler and mapd)
 # can write here, but not /var/lib/hearth itself (0750 hearth).
 DEFAULT_REGISTRY = os.environ.get("HEARTH_SCHEDULE", "/var/lib/hearth/scheduler/schedule.json")
+# Read-only declarative missions rendered by the system configuration, plus the
+# writable sidecar where their last-run stamps live.
+DEFAULT_MISSIONS = os.environ.get("HEARTH_MISSIONS", "/etc/hearth/missions.json")
+DEFAULT_MISSIONS_STATE = os.environ.get(
+    "HEARTH_MISSIONS_STATE", "/var/lib/hearth/scheduler/declarative-state.json")
 QUEUE_DIR = "/var/lib/hearth/queue"
 SYSTEMCTL = "/run/current-system/sw/bin/systemctl"
 SUDO = "/run/wrappers/bin/sudo"
@@ -65,6 +77,65 @@ def add_mission(mission, path=DEFAULT_REGISTRY):
     return mid
 
 
+def load_declarative(path=None):
+    """Return declarative missions from the read-only config file, or [] if the
+    file is missing or invalid. Each entry gets id "nix-<name>" and a
+    "source": "nix" marker. Entries without name/prompt/schedule are skipped."""
+    path = path or DEFAULT_MISSIONS
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for entry in data:
+        if not isinstance(entry, dict) or not (
+                entry.get("name") and entry.get("prompt") and entry.get("schedule")):
+            sys.stderr.write(
+                "hearth-schedule: skipping invalid declarative entry: {!r}\n".format(
+                    entry.get("name") if isinstance(entry, dict) else entry))
+            continue
+        m = dict(entry)
+        m["id"] = "nix-{}".format(entry["name"])
+        m["source"] = "nix"
+        m.setdefault("enabled", True)
+        out.append(m)
+    return out
+
+
+def load_declarative_state(path=None):
+    """Sidecar dict {mission_id: iso_ts} of declarative last-run stamps."""
+    path = path or DEFAULT_MISSIONS_STATE
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_declarative_state(state, path=None):
+    """Persist the sidecar atomically. Best-effort: failures are swallowed so a
+    read-only or missing state dir never stops the tick."""
+    path = path or DEFAULT_MISSIONS_STATE
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(state, fh, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _parse(ts):
     try:
         return datetime.fromisoformat(ts) if ts else None
@@ -100,6 +171,37 @@ def due_missions(missions, now):
     return [m for m in missions if is_due(m, now, _parse(m.get("last_run")))]
 
 
+def next_due(mission, now, last_run):
+    """Human-readable next-due info for listings. Pure."""
+    if not mission.get("enabled", True):
+        return "disabled"
+    if is_due(mission, now, last_run):
+        return "now"
+    sched = mission.get("schedule") or {}
+    every = sched.get("every_minutes")
+    if every and last_run is not None:
+        return (last_run + timedelta(minutes=float(every))).isoformat(sep=" ", timespec="minutes")
+    at = sched.get("at")
+    if at:
+        try:
+            hh, mm = (int(x) for x in at.split(":", 1))
+        except (ValueError, AttributeError):
+            return "?"
+        at_today = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if now < at_today:
+            return at_today.isoformat(sep=" ", timespec="minutes")
+        return (at_today + timedelta(days=1)).isoformat(sep=" ", timespec="minutes")
+    return "?"
+
+
+def _csv(value):
+    """Normalize list-or-string to the comma-joined form the queue consumer
+    expects (same shape hearth_mapd writes)."""
+    if isinstance(value, list):
+        return ",".join(str(v) for v in value)
+    return value or ""
+
+
 def _kick_spawn():
     for args in (["reset-failed", "hearth-spawn.path", "hearth-spawn.service"],
                  ["start", "--no-block", "hearth-spawn.service"]):
@@ -117,8 +219,11 @@ def dispatch(mission, queue_dir=QUEUE_DIR, kick=True):
     run_id = "{}-{}".format(name, uuid.uuid4().hex[:8])
     req = {
         "name": run_id, "model": mission.get("model") or "qwen2.5-coder",
-        "prompt": mission.get("goal") or "", "mode": mission.get("mode") or "bypass",
-        "creds": mission.get("creds") or "",
+        "prompt": mission.get("prompt") or mission.get("goal") or "",
+        "mode": mission.get("mode") or "bypass",
+        "creds": _csv(mission.get("creds")),
+        "tools": _csv(mission.get("tools")),
+        "allowed_hosts": _csv(mission.get("allowed_hosts")),
         "swarm": kind == "swarm", "marathon": kind == "marathon",
         "checkin": False, "evolve": False, "grow": False,
     }
@@ -133,15 +238,24 @@ def dispatch(mission, queue_dir=QUEUE_DIR, kick=True):
     return run_id
 
 
-def tick(path=DEFAULT_REGISTRY, now=None, dispatch_fn=None):
-    """Dispatch every due mission and stamp its last_run. Returns the list of
-    (mission_id, run_id) dispatched."""
+def tick(path=DEFAULT_REGISTRY, now=None, dispatch_fn=None, missions_path=None, state_path=None):
+    """Dispatch every due mission and stamp its last_run. Considers both the
+    mutable registry (stamps in the registry, as always) and the declarative
+    missions file (stamps in the sidecar state, since the config is read-only).
+    Returns the list of (mission_id, run_id) dispatched."""
     now = now or datetime.now()
     dispatch_fn = dispatch_fn or dispatch
+    declarative = load_declarative(missions_path)
+    declared_ids = set(m["id"] for m in declarative)
     missions = load_registry(path)
     fired = []
     changed = False
     for m in missions:
+        if m.get("id") in declared_ids:
+            sys.stderr.write(
+                "hearth-schedule: registry mission {} shadowed by declarative entry\n".format(
+                    m.get("id")))
+            continue
         if is_due(m, now, _parse(m.get("last_run"))):
             try:
                 run_id = dispatch_fn(m)
@@ -152,6 +266,20 @@ def tick(path=DEFAULT_REGISTRY, now=None, dispatch_fn=None):
             fired.append((m["id"], run_id))
     if changed:
         save_registry(missions, path)
+    if declarative:
+        state = load_declarative_state(state_path)
+        state_changed = False
+        for m in declarative:
+            if is_due(m, now, _parse(state.get(m["id"]))):
+                try:
+                    run_id = dispatch_fn(m)
+                except Exception:  # noqa: BLE001
+                    continue
+                state[m["id"]] = now.isoformat()
+                state_changed = True
+                fired.append((m["id"], run_id))
+        if state_changed:
+            save_declarative_state(state, state_path)
     return fired
 
 
@@ -183,17 +311,87 @@ def _self_test():
     assert is_due(m_at, after + timedelta(days=1), after) is True, "next day -> due again"
 
     # tick dispatches due missions, stamps last_run, and is idempotent within the window
+    no_decl = os.path.join(d, "no-missions.json")  # keep ticks hermetic on real hosts
     fired_log = []
     add_mission({"id": "due1", "name": "x", "goal": "g", "schedule": {"every_minutes": 5}}, path=reg)
-    out = tick(reg, now=base, dispatch_fn=lambda m: fired_log.append(m["id"]) or ("run-" + m["id"]))
+    out = tick(reg, now=base, dispatch_fn=lambda m: fired_log.append(m["id"]) or ("run-" + m["id"]),
+               missions_path=no_decl)
     ids = [mid for mid, _ in out]
     assert "due1" in ids, ("due1 should fire", out)
     # immediately ticking again: due1 just ran, the 60-min one already fired too -> nothing new
-    out2 = tick(reg, now=base, dispatch_fn=lambda m: fired_log.append(m["id"]) or "x")
+    out2 = tick(reg, now=base, dispatch_fn=lambda m: fired_log.append(m["id"]) or "x",
+                missions_path=no_decl)
     assert out2 == [], ("nothing due right after a tick", out2)
     # an hour later the 5-min mission is due again
-    out3 = tick(reg, now=base + timedelta(hours=1), dispatch_fn=lambda m: "r")
+    out3 = tick(reg, now=base + timedelta(hours=1), dispatch_fn=lambda m: "r",
+                missions_path=no_decl)
     assert any(mid == "due1" for mid, _ in out3), out3
+
+    # declarative loading: valid entries get nix- ids, invalid ones are skipped
+    dm = os.path.join(d, "missions.json")
+    st = os.path.join(d, "declarative-state.json")
+    with open(dm, "w") as fh:
+        json.dump([
+            {"name": "watch", "kind": "agent", "model": "m", "prompt": "p",
+             "schedule": {"every_minutes": 15}, "tools": ["read_file"],
+             "allowed_hosts": ["github.com"], "creds": ["alpha"], "enabled": True},
+            {"name": "off", "prompt": "p", "schedule": {"every_minutes": 1}, "enabled": False},
+            {"name": "bad-no-prompt", "schedule": {"every_minutes": 1}},
+        ], fh)
+    decl = load_declarative(dm)
+    assert [m["id"] for m in decl] == ["nix-watch", "nix-off"], decl
+    assert all(m.get("source") == "nix" for m in decl)
+
+    # a due declarative mission fires and stamps the sidecar, not the registry
+    reg2 = os.path.join(d, "sched2.json")
+    save_registry([], reg2)
+    seen = []
+    out = tick(reg2, now=base, dispatch_fn=lambda m: seen.append(m) or ("run-" + m["id"]),
+               missions_path=dm, state_path=st)
+    assert out == [("nix-watch", "run-nix-watch")], out
+    assert load_registry(reg2) == [], "registry untouched by declarative stamps"
+    state = load_declarative_state(st)
+    assert state.get("nix-watch") == base.isoformat(), state
+    assert "nix-off" not in state, "disabled declarative never fires"
+    # not due again inside the window, due again after it
+    out = tick(reg2, now=base + timedelta(minutes=5), dispatch_fn=lambda m: "r",
+               missions_path=dm, state_path=st)
+    assert out == [], out
+    out = tick(reg2, now=base + timedelta(minutes=20), dispatch_fn=lambda m: "r",
+               missions_path=dm, state_path=st)
+    assert [mid for mid, _ in out] == ["nix-watch"], out
+
+    # id collision: declarative wins, registry twin never fires or gets stamped
+    save_registry([{"id": "nix-watch", "name": "impostor", "goal": "g",
+                    "schedule": {"every_minutes": 1}, "enabled": True,
+                    "last_run": None}], reg2)
+    st2 = os.path.join(d, "state2.json")
+    seen2 = []
+    out = tick(reg2, now=base, dispatch_fn=lambda m: seen2.append(m) or ("run-" + m["id"]),
+               missions_path=dm, state_path=st2)
+    assert [mid for mid, _ in out] == ["nix-watch"], out
+    assert len(seen2) == 1 and seen2[0].get("source") == "nix", "declarative wins on collision"
+    assert load_registry(reg2)[0]["last_run"] is None, "shadowed registry mission untouched"
+
+    # dispatch writes the scoping fields in normalized comma-joined form
+    q = os.path.join(d, "queue")
+    rid = dispatch({"name": "scoped", "kind": "agent", "prompt": "do it",
+                    "tools": ["read_file", "web_get"], "allowed_hosts": "github.com",
+                    "creds": ["alpha", "beta"]}, queue_dir=q, kick=False)
+    with open(os.path.join(q, rid + ".json")) as fh:
+        req = json.load(fh)
+    assert req["tools"] == "read_file,web_get", req
+    assert req["allowed_hosts"] == "github.com", req
+    assert req["creds"] == "alpha,beta", req
+    assert req["prompt"] == "do it", req
+
+    # invalid declarative file: [] and tick still runs the registry
+    badf = os.path.join(d, "bad-missions.json")
+    with open(badf, "w") as fh:
+        fh.write("{not json")
+    assert load_declarative(badf) == []
+    out = tick(reg2, now=base, dispatch_fn=lambda m: "r", missions_path=badf, state_path=st2)
+    assert [mid for mid, _ in out] == ["nix-watch"], ("registry twin fires once nothing shadows it", out)
 
     print("hearth-schedule self-test OK")
     return 0
@@ -213,9 +411,17 @@ def main(argv=None):
         print("dispatched {} mission(s): {}".format(len(fired), ", ".join(r for _, r in fired) or "none"))
         return 0
     if a.list:
+        now = datetime.now()
         for m in load_registry(a.registry):
-            print("{}  {}  {}  last_run={}".format(
-                m.get("id"), m.get("name"), m.get("schedule"), m.get("last_run")))
+            print("{}  {}  {}  last_run={}  next={}".format(
+                m.get("id"), m.get("name"), m.get("schedule"), m.get("last_run"),
+                next_due(m, now, _parse(m.get("last_run")))))
+        state = load_declarative_state()
+        for m in load_declarative():
+            last = state.get(m["id"])
+            print("{}  {}  {}  [nix]  last_run={}  next={}".format(
+                m.get("id"), m.get("name"), m.get("schedule"), last,
+                next_due(m, now, _parse(last))))
         return 0
     p.print_help()
     return 2

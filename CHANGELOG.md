@@ -3,6 +3,36 @@
 All notable changes to hearth. Versions follow semantic versioning; each is a
 git tag and a GitHub release.
 
+## v1.5.0 - Governor
+
+A hard daily token budget with a circuit breaker, unified push alerting, and
+scheduled missions you declare in the flake. The works-while-you-sleep layer
+gets a leash.
+
+- **Spend circuit breaker**: a daily token budget across all runs
+  (`HEARTH_DAILY_TOKEN_CAP`, or `hearth.governor.dailyTokenCap` in the flake).
+  The agent loop checks the audit DB before each model call; at the cap,
+  running agents halt gracefully with error `budget: daily token cap reached`,
+  new runs refuse to start, a push notification fires, and the cockpit shows
+  "BREAKER OPEN". A budget card in the cockpit shows a live progress bar
+  (`GET /budget`), and the security scoreboard gains breaker and alerting
+  chips.
+- **Unified alerting**: `agent/hearth_notify.py` fans out to Telegram (the
+  existing bot creds) and ntfy (`hearth.governor.ntfyTopic` /
+  `HEARTH_NTFY_TOPIC`; `ntfyUrl` defaults to `https://ntfy.sh`). Fires on
+  error, tripwire, and budget breach always; on successful completion only
+  when `notifyDone` / `HEARTH_NOTIFY_DONE` is on. Best-effort by design, never
+  blocks a run.
+- **Declarative scheduled missions (cron-as-flake)**:
+  `hearth.schedule.missions.<name> = { schedule = "07:00" or "every:30";
+  prompt; model; kind; tools; allowedHosts; creds; enabled; }` renders to
+  `/etc/hearth/missions.json`. The scheduler merges these read-only "nix"
+  missions with cockpit-created ones; last-run state lives in a sidecar, so
+  the rendered file stays pure config. Mission launches carry the capability
+  manifest and egress allowlist, composing the v1.1 manifests and the v1.4
+  wall. The cockpit missions panel shows nix missions with a tag; they are not
+  editable there (toggle/delete return 400).
+
 ## v1.4.0 - Wall
 
 The egress allowlist now reaches the kernel: declared hosts are enforced with

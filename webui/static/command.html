@@ -112,6 +112,10 @@
     <div class="title">security</div>
     <div id="securityBody" style="font-size:12px;">loading...</div>
   </div>
+  <div class="card" id="budget" style="grid-column:1/3;">
+    <div class="title">budget</div>
+    <div id="budgetBody" style="font-size:12px;">loading...</div>
+  </div>
   <div class="card" id="sched" style="grid-column:1/3;">
     <div class="title">standing missions</div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px;">
@@ -419,16 +423,44 @@ async function refreshSecurity(){
     const egChip=s.egress_os?chipC("egress: OS-enforced","#6fcf7f","#1a4a2a",egDetail)
       :(eg.logged?chipC("egress: tool layer","#f0a030","#5a4a2a",egDetail)
       :chip("egress log",true,egDetail));
+    const bud=s.budget||{}, al=s.alerting||{};
+    const budChip=bud.capped?chipC("breaker: OPEN","#e06a6a","#5a2a2a","new runs paused")
+      :(bud.cap?chip("breaker: armed (cap "+bud.cap.toLocaleString()+")",true)
+      :chipC("breaker: off","#f0a030","#5a4a2a","no daily cap"));
+    const chans=[al.telegram_env?"telegram":"",al.ntfy?"ntfy":""].filter(Boolean);
+    const alChip=chans.length?chip("alerts: "+chans.join("+"),true)
+      :chipC("alerts: off","#f0a030","#5a4a2a","no channel configured");
     document.getElementById("securityBody").innerHTML=
       chip("remote auth",s.remote_auth,s.remote_auth?"token required":"localhost only")+
       chip("rate limit",true,(s.rate_limit_per_min||0)+"/min")+
       chip("capability manifests",s.manifests_supported,"per-run tool caps")+
       egChip+
+      budChip+alChip+
       chip("tripwires",tw.armed,tw.armed?((tw.trips||0)+" trips"):"not armed yet")+
       Object.entries(d).map(([u,ok])=>chip(u.replace("hearth-","").replace(".service","").replace(".timer"," timer"),ok,ok?"active":"down")).join("");
   }catch(e){}
 }
 setInterval(refreshSecurity,7000); refreshSecurity();
+
+// ---- budget: today's token spend vs the daily cap ----
+async function refreshBudget(){
+  try{
+    const b=await(await fetch("/budget")).json();
+    const el=document.getElementById("budgetBody");
+    if(!b.cap){
+      el.innerHTML=`<div style="color:#8a93a0;">no daily cap set</div>`+
+        `<div style="color:#cfe6ff;margin-top:4px;">${(b.tokens_today||0).toLocaleString()} tokens today &middot; ${b.runs_today|0} runs</div>`;
+      return;
+    }
+    const pct=Math.min(100,100*(b.tokens_today||0)/b.cap);
+    const col=pct<60?"#6fcf7f":(pct<90?"#f0a030":"#e06a6a");
+    el.innerHTML=
+      `<div class="row">${(b.tokens_today||0).toLocaleString()} / ${b.cap.toLocaleString()} tokens today</div>`+
+      `<div class="bar"><i style="width:${pct}%;background:${col};"></i></div>`+
+      (b.capped?`<div style="color:#e06a6a;"><b>BREAKER OPEN: new runs paused</b></div>`:"");
+  }catch(e){}
+}
+setInterval(refreshBudget,5000); refreshBudget();
 
 // ---- standing missions (scheduler) ----
 async function refreshSched(){
@@ -438,12 +470,15 @@ async function refreshSched(){
     document.getElementById("schedBody").innerHTML=ms.length?ms.map(m=>{
       const sc=m.schedule||{};
       const when=sc.every_minutes?("every "+sc.every_minutes+"m"):(sc.at?("daily "+sc.at):"?");
+      const isNix=m.source==="nix"||String(m.id||"").indexOf("nix-")===0;
+      const tag=isNix?`<small style="color:#04150c;background:#5fd0ff;border-radius:4px;padding:0 5px;font-size:9px;">nix</small>`:"";
+      const btns=isNix?"":`<button data-id="${esc(m.id)}" class="scTgl" style="background:none;border:1px solid #16324f;color:#9fb6cc;border-radius:5px;font-size:10px;cursor:pointer;padding:2px 7px;">${m.enabled?"pause":"resume"}</button>
+        <button data-id="${esc(m.id)}" class="scDel" style="background:none;border:1px solid #5a2a2a;color:#e06a6a;border-radius:5px;font-size:10px;cursor:pointer;padding:2px 7px;">delete</button>`;
       return `<div style="display:flex;align-items:center;gap:8px;border-left:3px solid ${m.enabled?"#6fcf7f":"#5a2a2a"};padding:3px 8px;margin:3px 0;">
-        <b style="color:#cfe6ff">${esc(m.name||m.id)}</b>
+        <b style="color:#cfe6ff">${esc(m.name||m.id)}</b>${tag}
         <small style="color:#8a93a0">${esc(m.kind||"agent")} &middot; ${esc(when)}${m.last_run?(" &middot; last "+esc(m.last_run.slice(5,16))):""}</small>
         <span style="margin-left:auto;"></span>
-        <button data-id="${esc(m.id)}" class="scTgl" style="background:none;border:1px solid #16324f;color:#9fb6cc;border-radius:5px;font-size:10px;cursor:pointer;padding:2px 7px;">${m.enabled?"pause":"resume"}</button>
-        <button data-id="${esc(m.id)}" class="scDel" style="background:none;border:1px solid #5a2a2a;color:#e06a6a;border-radius:5px;font-size:10px;cursor:pointer;padding:2px 7px;">delete</button>
+        ${btns}
       </div>`;}).join(""):"<small style='color:#8a93a0'>no standing missions. add one above.</small>";
     document.querySelectorAll(".scTgl").forEach(b=>b.onclick=async()=>{await fetch("/schedule/"+b.dataset.id+"/toggle",{method:"POST"});refreshSched();});
     document.querySelectorAll(".scDel").forEach(b=>b.onclick=async()=>{await fetch("/schedule/"+b.dataset.id+"/delete",{method:"POST"});refreshSched();});
