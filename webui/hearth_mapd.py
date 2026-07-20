@@ -350,23 +350,35 @@ def read_stats_history(db, days=14):
     }
 
 
-def read_egress(db, agent="", limit=200):
+def read_egress(db, agent="", limit=200, blocked=False):
     """Read the egress log (outbound network attempts recorded by the agent
-    tools), newest first, optionally for one agent."""
+    tools, or by the OS-layer watcher with tool='os'), newest first, optionally
+    for one agent and optionally blocked (allowed=0) rows only. limit is capped
+    at 200 so the world HUD can poll cheaply."""
     if not os.path.exists(db):
         return []
     try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 200
+    limit = max(1, min(limit, 200))
+    try:
         con = sqlite3.connect(db, timeout=10)
+        where, params = [], []
         if agent:
-            cur = con.execute(
-                "SELECT agent_id, ts, tool, host, url, allowed FROM egress_log "
-                "WHERE agent_id=? ORDER BY id DESC LIMIT ?", (agent, limit))
-        else:
-            cur = con.execute(
-                "SELECT agent_id, ts, tool, host, url, allowed FROM egress_log "
-                "ORDER BY id DESC LIMIT ?", (limit,))
-        rows = [{"agent": r[0], "ts": r[1], "tool": r[2], "host": r[3],
-                 "url": r[4], "allowed": bool(r[5])} for r in cur.fetchall()]
+            where.append("agent_id=?")
+            params.append(agent)
+        if blocked:
+            where.append("allowed=0")
+        q = "SELECT id, agent_id, ts, tool, host, url, allowed FROM egress_log"
+        if where:
+            q += " WHERE " + " AND ".join(where)
+        q += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        cur = con.execute(q, tuple(params))
+        rows = [{"id": r[0], "agent": r[1], "ts": r[2], "tool": r[3],
+                 "host": r[4], "url": r[5], "allowed": bool(r[6])}
+                for r in cur.fetchall()]
         con.close()
         return rows
     except sqlite3.Error:
@@ -488,6 +500,9 @@ def read_security(db, is_active_fn=None):
         "remote_auth": bool(API_TOKEN),
         "rate_limit_per_min": RATE_LIMIT,
         "manifests_supported": True,
+        # v1.4 "Wall": True when the NixOS module has per-run nftables egress
+        # enforcement switched on for this box (env set on the mapd service).
+        "egress_os": os.environ.get("HEARTH_EGRESS_OS") == "1",
         "egress": {"logged": egress_total, "blocked": egress_blocked},
         "tripwires": {"armed": tripwires_armed, "trips": tripwire_count},
         "daemons": {u: is_active_fn(u) for u in
@@ -1188,8 +1203,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/egress":
             qs = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             agent = (qs.get("agent") or [""])[0]
-            return self._send(200, json.dumps({"egress": read_egress(self.db, agent)}),
-                              "application/json")
+            limit = (qs.get("limit") or ["200"])[0]
+            blocked = (qs.get("blocked") or ["0"])[0] == "1"
+            return self._send(200, json.dumps(
+                {"egress": read_egress(self.db, agent, limit=limit, blocked=blocked)}),
+                "application/json")
         if path == "/security":
             return self._send(200, json.dumps(read_security(self.db)), "application/json")
         if path == "/tripwires":
@@ -1673,6 +1691,14 @@ def _self_test():
     assert read_egress(sdb, agent="nobody") == []
     blocked = [e for e in eg if not e["allowed"]]
     assert blocked and blocked[0]["host"] == "evil.com", eg
+    # v1.4: rows carry ids (so the world HUD can track the newest blocked hit),
+    # blocked=True filters to allowed=0 only, and limit is coerced + capped.
+    assert eg[0]["id"] > eg[1]["id"], eg
+    egb = read_egress(sdb, blocked=True, limit=5)
+    assert len(egb) == 1 and egb[0]["host"] == "evil.com" and egb[0]["allowed"] is False, egb
+    assert len(read_egress(sdb, limit=1)) == 1
+    assert read_egress(sdb, limit="junk") == eg, "bad limit falls back to the default"
+    assert read_egress(sdb, limit=9999) == eg, "limit is capped, not an error"
     sec = read_security(sdb, is_active_fn=lambda u: u == "hearth-mapd.service")
     assert sec["egress"] == {"logged": 2, "blocked": 1}, sec
     assert sec["tripwires"] == {"armed": False, "trips": 0}, sec  # not armed until a tripwires table exists
@@ -1689,6 +1715,35 @@ def _self_test():
     assert sec2["tripwires"] == {"armed": True, "trips": 1}, sec2
     assert sec["daemons"]["hearth-mapd.service"] is True and sec["daemons"]["hearth-grow.service"] is False, sec
     assert sec["manifests_supported"] is True
+
+    # v1.4: the egress_os flag mirrors the env the NixOS module sets on the
+    # mapd service when OS-level (nftables) enforcement is switched on.
+    prev_os = os.environ.pop("HEARTH_EGRESS_OS", None)
+    try:
+        assert read_security(sdb, is_active_fn=lambda u: False)["egress_os"] is False
+        os.environ["HEARTH_EGRESS_OS"] = "1"
+        assert read_security(sdb, is_active_fn=lambda u: False)["egress_os"] is True
+        os.environ["HEARTH_EGRESS_OS"] = "0"
+        assert read_security(sdb, is_active_fn=lambda u: False)["egress_os"] is False
+    finally:
+        if prev_os is None:
+            os.environ.pop("HEARTH_EGRESS_OS", None)
+        else:
+            os.environ["HEARTH_EGRESS_OS"] = prev_os
+
+    # and the same filter through the HTTP layer: /egress?blocked=1&limit=5
+    # returns only blocked rows (this is what the world HUD polls).
+    srv_eg = make_server("127.0.0.1", 0, sdb, DEFAULT_STATIC)
+    threading.Thread(target=srv_eg.serve_forever, daemon=True).start()
+    try:
+        u = "http://127.0.0.1:{}/egress?blocked=1&limit=5".format(srv_eg.server_address[1])
+        with urllib.request.urlopen(u, timeout=5) as resp:
+            got = json.loads(resp.read().decode())
+        assert [e["host"] for e in got["egress"]] == ["evil.com"], got
+        assert all(e["allowed"] is False and "id" in e for e in got["egress"]), got
+    finally:
+        srv_eg.shutdown()
+        srv_eg.server_close()
 
     # /tools registry: importable in the repo layout; every entry carries a risk class
     tools_list = read_tools()

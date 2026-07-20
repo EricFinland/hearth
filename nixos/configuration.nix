@@ -20,6 +20,7 @@
     ./modules/grow.nix
     ./modules/schedule.nix
     ./modules/tripwire.nix
+    ./modules/egress.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this

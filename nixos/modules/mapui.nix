@@ -62,8 +62,10 @@ in
         Restart = "on-failure";
         EnvironmentFile = [ "-/var/lib/hearth/secrets/mapd.env" ];
         # Lets /tools import the agent tool registry (agent/ is not packaged
-        # next to webui/ in the store).
-        Environment = [ "HEARTH_AGENT_DIR=${../../agent}" ];
+        # next to webui/ in the store). HEARTH_EGRESS_OS tells the cockpit
+        # scoreboard that OS-level egress enforcement (egress.nix) is active.
+        Environment = [ "HEARTH_AGENT_DIR=${../../agent}" ]
+          ++ lib.optional config.hearth.egress.enable "HEARTH_EGRESS_OS=1";
         # Children invoke sudo; do not block privilege escalation.
         NoNewPrivileges = false;
       };

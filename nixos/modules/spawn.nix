@@ -29,6 +29,16 @@ let
       [ -n "$creds" ] && export HEARTH_ALLOWED_CREDS="$creds"
       [ -n "$tools" ] && export HEARTH_ALLOWED_TOOLS="$tools"
       [ -n "$hosts" ] && export HEARTH_ALLOWED_HOSTS="$hosts"
+      ${lib.optionalString config.hearth.egress.enable ''
+        # OS-level egress wall (egress.nix): load the per-run nft chain before the
+        # loop starts. Best-effort: a failure here must never block a run, the
+        # in-loop allowlist still applies either way. Empty hosts = allow-all,
+        # nothing to load.
+        if [ -n "$hosts" ]; then
+          /run/wrappers/bin/sudo ${config.hearth.egress.package}/bin/hearth-egress apply --id "$id" --hosts "$hosts" \
+            || echo "hearth-egress: apply failed for $id; continuing without OS-level enforcement" >&2
+        fi
+      ''}
       if [ -n "$swarm" ]; then
         exec ${config.hearth.agents.loopPackage}/bin/hearth-loop --manager --agent-name "$id" --model "$model" --mode "$mode" --workspace "$ws" --db /var/lib/hearth/runs/audit.db "$prompt"
       fi
@@ -66,6 +76,10 @@ lib.mkIf config.hearth.agents.enable {
       # channel (readable at $CREDENTIALS_DIRECTORY/creds), not world-readable.
       LoadCredential = [ "creds:/var/lib/hearth/secrets/agent-credentials" ];
       ExecStart = "${runner}/bin/hearth-run-from-queue %i";
+    } // lib.optionalAttrs config.hearth.egress.enable {
+      # Tear down the run's nft chain when the unit stops. The "-" prefix makes
+      # a failed removal non-fatal (e.g. no chain was ever loaded for this run).
+      ExecStopPost = "-/run/wrappers/bin/sudo ${config.hearth.egress.package}/bin/hearth-egress remove --id %i";
     };
   };
 

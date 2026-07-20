@@ -413,12 +413,17 @@ async function refreshSecurity(){
     const s=await(await fetch("/security")).json();
     const dot=ok=>`<span style="color:${ok?"#6fcf7f":"#e06a6a"}">${ok?"&#9679;":"&#9675;"}</span>`;
     const chip=(label,ok,detail)=>`<span style="display:inline-block;border:1px solid ${ok?"#1a4a2a":"#5a2a2a"};border-radius:6px;padding:3px 9px;margin:2px 4px 2px 0;">${dot(ok)} ${label}${detail?` <small style="color:#8a93a0">${detail}</small>`:""}</span>`;
+    const chipC=(label,color,border,detail)=>`<span style="display:inline-block;border:1px solid ${border};border-radius:6px;padding:3px 9px;margin:2px 4px 2px 0;"><span style="color:${color}">&#9679;</span> ${label}${detail?` <small style="color:#8a93a0">${detail}</small>`:""}</span>`;
     const d=s.daemons||{}, eg=s.egress||{}, tw=s.tripwires||{};
+    const egDetail=`${eg.logged||0} logged, <b style="color:${eg.blocked?"#e06a6a":"#8a93a0"}">${eg.blocked||0} blocked</b>`;
+    const egChip=s.egress_os?chipC("egress: OS-enforced","#6fcf7f","#1a4a2a",egDetail)
+      :(eg.logged?chipC("egress: tool layer","#f0a030","#5a4a2a",egDetail)
+      :chip("egress log",true,egDetail));
     document.getElementById("securityBody").innerHTML=
       chip("remote auth",s.remote_auth,s.remote_auth?"token required":"localhost only")+
       chip("rate limit",true,(s.rate_limit_per_min||0)+"/min")+
       chip("capability manifests",s.manifests_supported,"per-run tool caps")+
-      chip("egress log",true,`${eg.logged||0} logged, <b style="color:${eg.blocked?"#e06a6a":"#8a93a0"}">${eg.blocked||0} blocked</b>`)+
+      egChip+
       chip("tripwires",tw.armed,tw.armed?((tw.trips||0)+" trips"):"not armed yet")+
       Object.entries(d).map(([u,ok])=>chip(u.replace("hearth-","").replace(".service","").replace(".timer"," timer"),ok,ok?"active":"down")).join("");
   }catch(e){}

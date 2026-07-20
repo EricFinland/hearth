@@ -29,20 +29,61 @@ scoped mission stays scoped all the way down.
 
 ## Egress allowlists
 
-A launch can declare a set of allowed hosts, and the web tools (`web_fetch`,
-`web_search`, `http_request`, `fetch_to_kb`) may reach ONLY those hosts. An entry
-matches itself and its subdomains (`github.com` allows `api.github.com`), and
-loopback is always allowed so local APIs and Ollama keep working. A blocked
-request returns an error the model can learn from instead of a network failure.
+A launch can declare a set of allowed hosts, and the run may reach ONLY those
+hosts. An entry matches itself and its subdomains (`github.com` allows
+`api.github.com`), and loopback is always allowed so local APIs and Ollama keep
+working. In the cockpit, use the "allowed hosts" field; over the API pass
+`allowed_hosts`, or set `HEARTH_ALLOWED_HOSTS`.
 
-Every outbound attempt, allowed or blocked, is recorded to the `egress_log`
-audit table and readable at `GET /egress`. In the cockpit, use the "allowed
-hosts" field; over the API pass `allowed_hosts`, or set `HEARTH_ALLOWED_HOSTS`.
+Enforcement happens at two layers.
 
-This is tool-layer enforcement: it stops accidents and naive prompt injection,
-and it makes all egress visible. It does not yet stop a run that shells out to
-`curl` directly. Kernel-level enforcement (systemd `IPAddressDeny` written per
-run) is the next step on this feature.
+### The tool layer (since v1.1)
+
+The web tools (`web_fetch`, `web_search`, `http_request`, `fetch_to_kb`) check
+every request against the allowlist. A blocked request returns an error the
+model can learn from instead of a network failure. Every outbound attempt,
+allowed or blocked, is recorded to the `egress_log` audit table and readable at
+`GET /egress`. This layer stops accidents and naive prompt injection, and it
+makes all egress visible.
+
+### The OS layer (since v1.4)
+
+With the tool layer alone, a run that shells out to `curl` never touches a
+hearth tool and slips past the allowlist. The OS layer closes that gap: when a
+spawned run declares `allowed_hosts`, hearth also programs per-run nftables
+rules before the run starts. A dedicated `table inet hearth` holds one chain
+per run, and packets are matched by the run's systemd cgroup
+(`system.slice/hearth-agent@<id>.service`), so the rules bind only that run's
+processes, shell children included. The chain allows loopback, DNS, and the
+declared hosts' resolved addresses; everything else is dropped at the kernel
+with a log record. The rules are removed when the unit stops.
+
+Kernel drops are picked up from the journal by the `hearth-egress-watch`
+bridge and written to the same `egress_log` table (tool `os`, allowed `0`), so
+`GET /egress` shows tool-layer and OS-layer events side by side.
+
+The OS layer is fail-open by design: if programming the rules fails (nftables
+unavailable, a transient error), the run still launches and the tool layer
+still enforces. A firewall hiccup should never brick launches; the wall is an
+extra layer, not a single point of failure.
+
+Turn it on with the NixOS module:
+
+```nix
+hearth.egress.enable = true;
+```
+
+It is off by default. See [Networking](/hearth/reference/networking/) for how
+the table coexists with the regular firewall and how to inspect live rules.
+
+### Honest scope
+
+OS enforcement covers spawned runs: background runs, missions, swarm children,
+and the queue path, each of which runs in its own
+`hearth-agent@<id>.service` unit. Interactive cockpit sessions run inside the
+mapd service cgroup, so they keep tool-layer enforcement only. And an empty
+`allowed_hosts` still means allow-all; the wall only goes up for a run that
+declares hosts.
 
 ## Honeyfile tripwires
 

@@ -82,6 +82,13 @@
     transition: transform .3s ease;
   }
   #savedCounter.bump { transform: scale(1.15); }
+  #egressCounter {
+    font-size: 11px; color: #e06a6a;
+    background: rgba(224,106,106,0.08); border: 1px solid #5a2a2a;
+    padding: 2px 10px; border-radius: 10px;
+    transition: transform .3s ease;
+  }
+  #egressCounter.bump { transform: scale(1.15); }
   #navLink {
     font-size: 10px; color: #8a93a0; text-decoration: none;
     border: 1px solid #16324f; padding: 2px 8px; border-radius: 6px;
@@ -246,6 +253,7 @@
   </div>
   <div id="agentCount">0 agents</div>
   <div id="savedCounter" title="what this facility's tokens would have cost on a frontier cloud model">$0 saved</div>
+  <div id="egressCounter" title="outbound connections stopped by the egress wall (tool layer + OS nftables)">0 blocked</div>
   <a id="navLink" href="/command">command</a>
 </div>
 <!-- launch bar bottom -->
@@ -1368,6 +1376,98 @@ async function fetchSaved() {
   } catch(e) {}
 }
 
+// ---- blocked egress spectacle (v1.4 wall) ----
+// A "bounced courier": a red ping streaks from the offending agent toward the
+// screen edge, flashes against the wall, and comes back. Fed by polling
+// /egress?blocked=1 for rows newer than the max egress_log id seen so far.
+const egressPings = [];
+
+function spawnEgressPing(agentId, host) {
+  let sx = W / 2, sy = MARGIN_TOP + WORLD_H / 2;
+  const sp = agentId && sprites.get(agentId);
+  if (sp) { sx = sp.x; sy = sp.y; }
+  const cands = [
+    {x: 10, y: sy}, {x: W - 10, y: sy},
+    {x: sx, y: MARGIN_TOP + 10}, {x: sx, y: MARGIN_TOP + WORLD_H - 10},
+  ];
+  let edge = cands[0], best = Infinity;
+  for (const c of cands) {
+    const d = Math.hypot(c.x - sx, c.y - sy);
+    if (d < best) { best = d; edge = c; }
+  }
+  egressPings.push({sx, sy, ex: edge.x, ey: edge.y, t: 0, out: true, flash: 0, host: host || ''});
+}
+
+function updateDrawEgressPings(dt) {
+  for (let i = egressPings.length - 1; i >= 0; i--) {
+    const p = egressPings[i];
+    p.t += 0.035 * dt;
+    if (p.t >= 1) {
+      if (p.out) { p.out = false; p.t = 0; p.flash = 1; }
+      else { egressPings.splice(i, 1); continue; }
+    }
+    const a = p.out ? p.t : 1 - p.t; // progress along the outbound path
+    const x = p.sx + (p.ex - p.sx) * a;
+    const y = p.sy + (p.ey - p.sy) * a;
+    ctx.save();
+    if (p.flash > 0) { // impact flash against the wall
+      ctx.globalAlpha = p.flash * 0.8;
+      ctx.fillStyle = '#ff4040';
+      ctx.beginPath();
+      ctx.arc(p.ex, p.ey, 8 + (1 - p.flash) * 16, 0, Math.PI * 2);
+      ctx.fill();
+      p.flash = Math.max(0, p.flash - 0.06 * dt);
+    }
+    const tb = p.out ? Math.max(0, a - 0.12) : Math.min(1, a + 0.12); // trail lags travel
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = 'rgba(255,80,80,0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p.sx + (p.ex - p.sx) * tb, p.sy + (p.ey - p.sy) * tb);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.fillStyle = '#ff5050';
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+let egressMaxId = -1;
+async function fetchBlocked() {
+  try {
+    const j = await (await fetch('/egress?blocked=1&limit=5')).json();
+    const rows = j.egress || [];
+    if (egressMaxId < 0) { // first poll is a baseline: old hits stay quiet
+      egressMaxId = rows.reduce((m, r) => Math.max(m, r.id || 0), 0);
+      return;
+    }
+    for (const r of rows.slice().reverse()) { // oldest first
+      if ((r.id || 0) > egressMaxId) {
+        egressMaxId = r.id;
+        spawnEgressPing(r.agent, r.host);
+        showToast('egress blocked: ' + (r.host || 'unknown host'));
+      }
+    }
+  } catch(e) {}
+}
+
+let lastEgressBlocked = -1;
+async function fetchEgressCount() {
+  try {
+    const j = await (await fetch('/security')).json();
+    const n = (j.egress || {}).blocked || 0;
+    const el = document.getElementById('egressCounter');
+    el.textContent = n.toLocaleString() + ' blocked';
+    if (lastEgressBlocked >= 0 && n > lastEgressBlocked) {
+      el.classList.add('bump');
+      setTimeout(() => el.classList.remove('bump'), 350);
+    }
+    lastEgressBlocked = n;
+  } catch(e) {}
+}
+
 async function fetchTree() {
   try {
     const j = await (await fetch('/tree')).json();
@@ -1675,6 +1775,8 @@ function loop(now) {
     if (!sp.done) sp.draw();
   }
 
+  updateDrawEgressPings(dt);
+
   drawMinimap();
 
   requestAnimationFrame(loop);
@@ -1688,6 +1790,8 @@ fetchTree();
 fetchState();
 setInterval(fetchStats, 3000);
 setInterval(fetchSaved, 8000); fetchSaved();
+setInterval(fetchBlocked, 5000); fetchBlocked();
+setInterval(fetchEgressCount, 10000); fetchEgressCount();
 setInterval(() => { fetchTree(); fetchState(); }, 1500);
 </script>
 </body></html>

@@ -3,6 +3,37 @@
 All notable changes to hearth. Versions follow semantic versioning; each is a
 git tag and a GitHub release.
 
+## v1.4.0 - Wall
+
+The egress allowlist now reaches the kernel: declared hosts are enforced with
+per-run nftables rules, not just in the web tools. This keeps the promise made
+in the v1.1.0 entry ("OS-level enforcement lands in v1.4").
+
+- **OS-level egress enforcement**: when a launch declares `allowed_hosts`,
+  hearth now also programs per-run nftables rules: a dedicated `table inet
+  hearth` with one chain per run, matched by the run's systemd cgroup
+  (`system.slice/hearth-agent@<id>.service`). Loopback, DNS, and the declared
+  hosts' resolved addresses are allowed; everything else is dropped at the
+  kernel with a log record. This closes the gap where a clever agent could
+  bypass the tool-layer allowlist by shelling out to `curl`.
+- **Blocked connections in the audit log**: a new `hearth-egress-watch` journal
+  bridge writes kernel drops to the same `egress_log` audit table (tool `os`,
+  allowed `0`), so `GET /egress` shows tool-layer and OS-layer events side by
+  side.
+- **Implementation**: `agent/hearth_egress.py` (an `apply` / `remove` / `watch`
+  CLI) and a NixOS module `nixos/modules/egress.nix` (option
+  `hearth.egress.enable`, off by default). Spawn integration applies the rules
+  before a run starts and removes them when the unit stops. A failure never
+  blocks a run: fail-open by design, so a firewall hiccup cannot brick
+  launches, and the tool layer still enforces.
+- **Scope**: OS enforcement covers spawned runs (background runs, missions,
+  swarm children, the queue path). Interactive cockpit sessions keep tool-layer
+  enforcement, since they run inside the mapd service cgroup. Empty
+  `allowed_hosts` still means allow-all.
+- **Cockpit**: the security scoreboard egress chip now shows "OS-enforced" when
+  the module is live; the world map shows a bounced-courier red ping and a
+  blocked counter when a connection is dropped.
+
 ## v1.3.0 - Replay
 
 A flight recorder for every run, a scrubber to replay it, and a side-by-side
