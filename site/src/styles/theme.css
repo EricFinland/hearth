@@ -1,14 +1,20 @@
-/* hearth docs theme: warm palette, clay accent, serif display headings.
-   A warm, editorial documentation aesthetic. */
+/* hearth docs theme: warm palette, orange accent, serif display headings.
+   A warm, editorial documentation aesthetic.
+
+   Orange is the Linux system's colour. Hearth for Windows is a separate
+   project with a separate site, and it is blue for the same reason: two
+   products that share a name should not be told apart by reading the URL.
+   The greys, the type and the layout are deliberately identical, so the
+   family resemblance survives the colour split. */
 
 :root {
   --sl-font: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
   --sl-font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
 
   /* Clay / terracotta accent */
-  --sl-color-accent-low: #2a160e;
-  --sl-color-accent: #cc785c;
-  --sl-color-accent-high: #eab59e;
+  --sl-color-accent-low: #2e1806;
+  --sl-color-accent: #e8822e;
+  --sl-color-accent-high: #f7c08a;
 
   /* Dark mode (default): warm charcoal */
   --sl-color-white: #faf7f2;
@@ -27,9 +33,9 @@
 
 :root[data-theme='light'] {
   /* Light mode: warm cream */
-  --sl-color-accent-low: #f3ddd3;
-  --sl-color-accent: #b5613f;
-  --sl-color-accent-high: #5a2c1a;
+  --sl-color-accent-low: #fbe3cd;
+  --sl-color-accent: #b85c10;
+  --sl-color-accent-high: #5e2c05;
 
   --sl-color-white: #20180f;
   --sl-color-gray-1: #2c241b;
