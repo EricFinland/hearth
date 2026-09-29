@@ -32,12 +32,18 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
+      # Stamp the git revision this system was built from, so `nixos-version
+      # --configuration-revision` and the bill of materials page (v1.7) can say
+      # exactly which commit is running. A dirty tree reports its dirty rev.
+      revisionModule = { system.configurationRevision = self.rev or self.dirtyRev or null; };
+
       # Modules shared by the deployable host and the image builds. Defined once
       # so the host config and the generated image stay identical.
       hostModules = [
         ./nixos/hosts/workstation.nix
         sops-nix.nixosModules.sops
         home-manager.nixosModules.home-manager
+        revisionModule
       ];
 
       # The minimal overlay disables the LLM stack (CUDA + Ollama) so a first
@@ -68,6 +74,7 @@
           ./nixos/hosts/blade.nix
           sops-nix.nixosModules.sops
           home-manager.nixosModules.home-manager
+          revisionModule
         ];
       };
 

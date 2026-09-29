@@ -94,6 +94,9 @@
     border: 1px solid #16324f; padding: 2px 8px; border-radius: 6px;
   }
   #navLink:hover { color: #5fd0ff; border-color: #5fd0ff; }
+  .navLinkAlt { font-size: 10px; color: #8a93a0; text-decoration: none;
+    border: 1px solid #16324f; padding: 2px 8px; border-radius: 6px; }
+  .navLinkAlt:hover { color: #5fd0ff; border-color: #5fd0ff; }
   /* Launch bar bottom */
   #launcher {
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
@@ -223,6 +226,67 @@
   #pr-diff-out { margin-top: 6px; max-height: 220px; overflow: auto; background: #070d17;
     border: 1px solid #0e2236; border-radius: 6px; padding: 6px; font-size: 10px;
     color: #9fb6cc; white-space: pre; }
+  /* v1.7 tycoon: treasury chip, building popover, trophy room */
+  #fuelChip {
+    font-size: 11px; color: #ffb347;
+    background: rgba(255,179,71,0.08); border: 1px solid #5a3f1a;
+    padding: 2px 10px; border-radius: 10px; white-space: nowrap;
+  }
+  #fuelChip.warn { color: #ff6030; border-color: #7a2a10; }
+  #bpop {
+    position: fixed; z-index: 30; display: none; pointer-events: none;
+    background: rgba(8,14,24,0.96); border: 1px solid #16324f;
+    border-radius: 10px; padding: 10px 14px; min-width: 190px; max-width: 280px;
+    font-size: 11px; line-height: 1.6;
+  }
+  #bpop .bp-title { color: #ffb347; font-size: 12px; margin-bottom: 4px; }
+  #bpop .bp-row { display: flex; justify-content: space-between; gap: 10px; }
+  #bpop .bp-row span:first-child { color: #5a7fa0; }
+  #bpop .bp-note { margin-top: 6px; font-size: 10px; color: #8a93a0; white-space: normal; }
+  #trophies {
+    position: fixed; left: 50%; top: 56px; transform: translateX(-50%); z-index: 35;
+    width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 130px);
+    background: rgba(5,8,15,0.97); border: 1px solid #5a3f1a; border-radius: 12px;
+    display: none; flex-direction: column; overflow: hidden;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  }
+  #trophies.open { display: flex; }
+  #trophies-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    border-bottom: 1px solid #2a2410; }
+  #trophies-head b { color: #ffb347; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  #trophies-head span { color: #8a93a0; font-size: 11px; }
+  #trophies-close { margin-left: auto; cursor: pointer; color: #5a7fa0; background: none;
+    border: none; font-family: inherit; font-size: 14px; }
+  #trophies-close:hover { color: #ffb347; }
+  #trophies-grid { padding: 12px 14px; overflow-y: auto;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .tro { border: 1px solid #16324f; border-radius: 9px; padding: 9px 10px; background: #070d17; }
+  .tro.on { border-color: #7a5a1a; background: linear-gradient(160deg, rgba(255,179,71,0.10), rgba(5,8,15,0.2)); }
+  .tro .t-top { display: flex; align-items: center; gap: 8px; }
+  .tro .t-ico { font-size: 20px; filter: grayscale(1); opacity: .35; }
+  .tro.on .t-ico { filter: none; opacity: 1; }
+  .tro .t-name { color: #8a93a0; font-size: 12px; }
+  .tro.on .t-name { color: #ffd28a; }
+  .tro .t-desc { color: #6a7a8a; font-size: 10px; margin-top: 4px; line-height: 1.45; }
+  .tro .t-bar { height: 4px; background: #0e2236; border-radius: 2px; margin-top: 7px; overflow: hidden; }
+  .tro .t-fill { height: 100%; background: linear-gradient(90deg, #7a5a1a, #ffb347); }
+  .tro .t-meta { font-size: 9px; color: #5a6a7a; margin-top: 4px; }
+  #achToast {
+    position: fixed; top: 60px; right: 16px; z-index: 45;
+    background: linear-gradient(135deg, #2a1c05, #0a0d14); border: 1px solid #ffb347;
+    color: #ffd28a; border-radius: 10px; padding: 10px 16px; font-size: 12px;
+    box-shadow: 0 6px 30px rgba(255,179,71,0.3);
+    transform: translateX(130%); transition: transform .5s cubic-bezier(.2,1.4,.4,1);
+  }
+  #achToast.show { transform: translateX(0); }
+  #achToast .a-k { font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: #ffb347; }
+  #achToast .a-t { font-size: 14px; margin-top: 2px; }
+  @media (max-width: 720px) {
+    #hud { gap: 8px; padding: 6px 10px; overflow-x: auto; }
+    #hud .hbar { min-width: 70px; }
+    #launcher { gap: 6px; padding: 8px 10px; overflow-x: auto; }
+    #launcher .btn { padding: 6px 9px; }
+  }
 </style>
 </head><body>
 <canvas id="c"></canvas>
@@ -254,7 +318,9 @@
   <div id="agentCount">0 agents</div>
   <div id="savedCounter" title="what this facility's tokens would have cost on a frontier cloud model">$0 saved</div>
   <div id="egressCounter" title="outbound connections stopped by the egress wall (tool layer + OS nftables)">0 blocked</div>
+  <div id="fuelChip" title="tokens spent today against the governor's daily cap (the facility's fuel)">fuel --</div>
   <a id="navLink" href="/command">command</a>
+  <a class="navLinkAlt sbomLink" href="/sbom" title="every package, model, and module with its pinned hash">sbom</a>
 </div>
 <!-- launch bar bottom -->
 <div id="launcher">
@@ -263,7 +329,15 @@
   <button class="btn" id="btnRun">run agent</button>
   <button class="btn" id="btnGrow" title="hearth improves itself on a loop; each idea is branched + validated, never auto-deployed">grow hearth</button>
   <button class="btn" id="btnLedger" title="watch what hearth has built for itself">ledger</button>
+  <button class="btn" id="btnTrophies" title="achievements the facility has unlocked">trophies</button>
 </div>
+<div id="bpop"></div>
+<div id="trophies">
+  <div id="trophies-head"><b>&#x1F3C6; trophy room</b><span id="trophies-count"></span>
+    <button id="trophies-close">x</button></div>
+  <div id="trophies-grid"></div>
+</div>
+<div id="achToast"><div class="a-k">achievement unlocked</div><div class="a-t" id="achToastT"></div></div>
 <div id="toast">dispatched</div>
 <div id="popover">
   <div class="pop-title" id="popTitle">agent</div>
@@ -492,7 +566,10 @@ function drawWorld() {
   drawTitlePlate();
 
   // vignette (canvas-drawn)
-  const vg = ctx.createRadialGradient(W/2, MARGIN_TOP + WORLD_H/2, WORLD_H*0.25, W/2, MARGIN_TOP + WORLD_H/2, WORLD_H*0.75);
+  // clamp: a collapsed viewport (hidden tab, zero-height pane) makes WORLD_H
+  // negative, and a negative radius throws and would stop the render loop
+  const vr = Math.max(1, WORLD_H);
+  const vg = ctx.createRadialGradient(W/2, MARGIN_TOP + WORLD_H/2, vr*0.25, W/2, MARGIN_TOP + WORLD_H/2, vr*0.75);
   vg.addColorStop(0, 'rgba(0,0,0,0)');
   vg.addColorStop(1, 'rgba(0,0,8,0.45)');
   ctx.fillStyle = vg;
@@ -506,7 +583,7 @@ function drawTitlePlate() {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = PALETTE.cyan;
   ctx.globalAlpha = 0.6;
-  ctx.fillText('hearth facility', px, py);
+  ctx.fillText('hearth facility  v1.7', px, py);
   ctx.globalAlpha = 1;
 }
 
@@ -936,15 +1013,31 @@ function layoutSprites() {
     }
   }
 
-  const totalGroups = groups.length + (loners.length > 0 ? 1 : 0);
   const rightBound = inspectOpen ? W - INSPECT_W - 10 : W - 30;
   const worldLeft = 30;
   const worldRight = rightBound;
-  const worldTop = MARGIN_TOP + 30;
+  const worldTop = MARGIN_TOP + 30 + skylineH();
   const worldBottom = MARGIN_TOP + WORLD_H - 50;
   const worldW = worldRight - worldLeft;
+
+  // v1.7: a free agent whose family has a building queues at that door.
+  const atDoor = new Map();
+  for (let i = loners.length - 1; i >= 0; i--) {
+    const sp = loners[i];
+    if (sp.state === 'DONE') continue;  // finished workers walk back out
+    const door = doorFor(sp);
+    if (!door) continue;
+    const k = door.x + ':' + door.y;
+    const n = atDoor.get(k) || 0;
+    atDoor.set(k, n + 1);
+    // stagger co-workers so their name tags do not stack on each other or on the sign
+    const wx = Math.max(worldLeft + 20, Math.min(worldRight - 20, door.x + ((n % 3) - 1) * 30));
+    sp.setTarget(wx, door.y + 36 + (n % 2) * 22 + Math.floor(n / 3) * 48);
+    loners.splice(i, 1);
+  }
   const worldHH = worldBottom - worldTop;
 
+  const totalGroups = groups.length + (loners.length > 0 ? 1 : 0);
   const cols = Math.max(1, Math.ceil(Math.sqrt(totalGroups)));
   const rows = Math.ceil(totalGroups / cols);
   const cellW = worldW / cols;
@@ -1102,6 +1195,7 @@ function getGroups() {
 function getLonerSprites() {
   const loners = [];
   for (const [id, sp] of sprites) {
+    if (sp.state !== 'DONE' && doorFor(sp)) continue;  // at their building, not free
     const node = treeNodes.get(id);
     if (!node) { loners.push(sp); continue; }
     if (node.parent_id) {
@@ -1302,9 +1396,13 @@ canvas.addEventListener('mousemove', e => {
     pop.style.top = py + 'px';
     pop.style.display = 'block';
     canvas.style.cursor = 'pointer';
+    document.getElementById('bpop').style.display = 'none';
   } else {
     pop.style.display = 'none';
     popoverTarget = null;
+    const r = buildingAt(mx, my);
+    if (r) showBuildingPop(r, mx, my);
+    else document.getElementById('bpop').style.display = 'none';
     canvas.style.cursor = '';
   }
 });
@@ -1339,6 +1437,10 @@ async function fetchStats() {
     const j = await (await fetch('/stats')).json();
     const g = j.gpu, m = j.mem;
     if (g) {
+      plant.seen = true;
+      plant.util = g.util_pct || 0;
+      plant.vram = g.mem_total_mb ? Math.round(100 * g.mem_used_mb / g.mem_total_mb) : 0;
+      plant.name = g.name || '';
       document.getElementById('gpuBar').style.display = '';
       document.getElementById('vramBar').style.display = '';
       const up = g.util_pct;
@@ -1726,6 +1828,360 @@ document.getElementById('pr-switch').onclick = () => promote('switch',
 document.getElementById('pr-rollback').onclick = () => promote('rollback',
   'Roll the live system back to the previous NixOS generation?');
 
+// ---- v1.7 tycoon: buildings, power plant, treasury, trophies ----
+// The skyline along the top of the floor is fed by GET /tycoon (cached server
+// side, zero tokens). Each agent family is a building whose height grows with
+// its lifetime runs; a worker on shift lights its windows and walks to its
+// door. The power plant burns in step with the GPU. Nothing here decides what
+// happened; it only draws what the audit log already says.
+let tycoon = { buildings: [], achievements: [], treasury: null, unlocked: 0 };
+let plant = { util: 0, vram: 0, name: '', seen: false };
+let buildingRects = [];            // hit boxes for hover, rebuilt every frame
+const smoke = [];
+const SKYLINE_H = 150;
+const FLOOR_H = 15;
+
+function familyOf(name) {
+  // mirror of hearth_tycoon.family_of: lowercase, strip random run suffixes
+  let s = String(name || '').trim().toLowerCase(), prev = null;
+  while (s && s !== prev) { prev = s; s = s.replace(/(-[0-9a-f]{6,}|-\d+)$/, ''); }
+  return s || 'unnamed';
+}
+
+function skylineH() {
+  return (tycoon.buildings.length || plant.seen) && WORLD_H > 360 ? SKYLINE_H : 0;
+}
+
+function fmtNum(n) {
+  n = Number(n || 0);
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
+// Where each building stands this frame; layoutSprites reads door positions.
+function skylineSlots() {
+  const sh = skylineH();
+  if (!sh) return [];
+  const ground = MARGIN_TOP + sh;
+  const narrow = W < 640;
+  const left = narrow ? 16 : 150, plantW = plant.seen ? 150 : 0;
+  const right = (inspectOpen ? W - INSPECT_W - 10 : W - 24) - plantW;
+  const gap = narrow ? 8 : 14;
+  // Busiest first from the server; when the street is too short, the quiet
+  // end of the list does not get a lot (the workshop keeps its place if it fits).
+  const room = Math.max(0, Math.floor((right - left + gap) / (34 + gap)));
+  let list = tycoon.buildings;
+  if (list.length > room) {
+    const shop = list.find(b => b.kind === 'workshop');
+    list = list.filter(b => b.kind !== 'workshop').slice(0, shop && room > 1 ? room - 1 : room);
+    if (shop && room > 1) list.push(shop);
+  }
+  const n = list.length;
+  if (!n || right - left < 40) return [];
+  const bw = Math.max(34, Math.min(78, (right - left - gap * (n - 1)) / n));
+  const total = n * bw + (n - 1) * gap;
+  let x = left + Math.max(0, (right - left - total) / 2);
+  return list.map(b => {
+    const h = 26 + (b.floors || 1) * FLOOR_H;
+    const slot = { b, x, y: ground - h, w: bw, h, door: { x: x + bw / 2, y: ground + 14 } };
+    x += bw + gap;
+    return slot;
+  });
+}
+
+function drawBuilding(slot, t) {
+  const { b, x, y, w, h } = slot;
+  const workshop = b.kind === 'workshop';
+  const shut = workshop && b.state === 'shuttered';
+  const active = (b.workers || 0) > 0 || (workshop && !shut);
+  const tone = workshop ? PALETTE.amber : (b.errors > 0 && b.errors >= b.runs / 2 ? PALETTE.red : PALETTE.cyan);
+  ctx.save();
+  // body
+  ctx.fillStyle = '#0a1626';
+  ctx.strokeStyle = tone;
+  ctx.globalAlpha = shut ? 0.55 : 1;
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, x, y, w, h, 3);
+  ctx.fill(); ctx.stroke();
+  // roof trim + antenna on the tallest blocks
+  ctx.fillStyle = tone;
+  ctx.globalAlpha = shut ? 0.3 : 0.5;
+  ctx.fillRect(x + 3, y + 3, w - 6, 3);
+  if ((b.floors || 1) >= 5 && !shut) {
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = tone;
+    ctx.beginPath(); ctx.moveTo(x + w / 2, y); ctx.lineTo(x + w / 2, y - 12); ctx.stroke();
+    ctx.fillStyle = Math.sin(t / 400) > 0 ? PALETTE.red : '#401010';
+    ctx.beginPath(); ctx.arc(x + w / 2, y - 13, 2, 0, Math.PI * 2); ctx.fill();
+  }
+  // windows: 3 per floor. On shift they flicker lit; a recent run leaves a
+  // few lights on; a shuttered workshop is boarded up.
+  const cols = w >= 50 ? 3 : 2;
+  const ww = (w - 10 - (cols - 1) * 4) / cols;
+  const recent = b.last_run && (Date.now() - Date.parse(b.last_run)) < 86400000;
+  for (let f = 0; f < (b.floors || 1); f++) {
+    for (let c = 0; c < cols; c++) {
+      const wx = x + 5 + c * (ww + 4);
+      const wy = y + 12 + f * FLOOR_H;
+      const seed = (f * 7 + c * 13 + b.family.length * 3) % 10;
+      let lit;
+      if (shut) lit = false;
+      else if (active) lit = ((Math.floor(t / 700) + seed) % 4) !== 0;
+      else lit = recent ? seed < 3 : seed === 0;
+      ctx.globalAlpha = lit ? 0.9 : 0.35;
+      ctx.fillStyle = lit ? (workshop ? '#ffcf7a' : '#bfefff') : '#13253a';
+      ctx.fillRect(wx, wy, ww, 7);
+      if (shut) { // boards across the window
+        ctx.globalAlpha = 0.7;
+        ctx.strokeStyle = '#6a4a1a';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + ww, wy + 7); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(wx + ww, wy); ctx.lineTo(wx, wy + 7); ctx.stroke();
+      }
+    }
+  }
+  // door
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = active ? tone : '#13253a';
+  ctx.fillRect(x + w / 2 - 5, y + h - 11, 10, 11);
+  // error badge
+  if (b.errors > 0) {
+    ctx.fillStyle = PALETTE.red;
+    ctx.beginPath(); ctx.arc(x + w - 4, y + 4, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 7px ui-monospace, monospace';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(b.errors > 9 ? '9+' : String(b.errors), x + w - 4, y + 4.5);
+  }
+  // sign under the building
+  ctx.font = '8px ui-monospace, monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const name = b.family.length > 12 ? b.family.slice(0, 11) + '.' : b.family;
+  ctx.fillStyle = workshop ? PALETTE.amber : PALETTE.text;
+  ctx.globalAlpha = shut ? 0.6 : 0.85;
+  ctx.fillText(name, x + w / 2, y + h + 3);
+  ctx.fillStyle = '#5a7fa0';
+  ctx.fillText(workshop ? (shut ? 'CLOSED' : 'open') : (b.runs + ' runs'), x + w / 2, y + h + 13);
+  ctx.restore();
+}
+
+function drawPowerPlant(t, dt) {
+  if (!plant.seen || !skylineH()) return;
+  const ground = MARGIN_TOP + skylineH();
+  const right = inspectOpen ? W - INSPECT_W - 10 : W - 24;
+  const x = right - 130, w = 120;
+  ctx.save();
+  // cooling tower (hyperboloid silhouette)
+  const tx = x + 28, top = ground - 78;
+  ctx.fillStyle = '#0a1626';
+  ctx.strokeStyle = '#8a93a0';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(tx - 22, ground);
+  ctx.quadraticCurveTo(tx - 10, ground - 40, tx - 15, top);
+  ctx.lineTo(tx + 15, top);
+  ctx.quadraticCurveTo(tx + 10, ground - 40, tx + 22, ground);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  // turbine hall
+  ctx.fillStyle = '#0a1626';
+  roundRect(ctx, x + 50, ground - 44, 66, 44, 3); ctx.fill(); ctx.stroke();
+  // two stacks
+  for (const sx of [x + 64, x + 96]) {
+    ctx.fillRect(sx - 4, ground - 70, 8, 26);
+    ctx.strokeRect(sx - 4, ground - 70, 8, 26);
+  }
+  // smoke: emission rate follows GPU load
+  const rate = 0.05 + plant.util / 100 * 0.6;
+  for (const sx of [x + 64, x + 96, tx]) {
+    if (Math.random() < rate * dt) {
+      smoke.push({ x: sx + (Math.random() - 0.5) * 4, y: sx === tx ? top : ground - 72,
+                   vx: 0.15 + Math.random() * 0.25, vy: -0.35 - Math.random() * 0.35,
+                   r: 3 + Math.random() * 3, life: 1, hot: plant.util > 85 });
+    }
+  }
+  for (let i = smoke.length - 1; i >= 0; i--) {
+    const p = smoke[i];
+    p.x += p.vx * dt; p.y += p.vy * dt; p.r += 0.05 * dt; p.life -= 0.008 * dt;
+    if (p.life <= 0 || p.y < MARGIN_TOP + 2) { smoke.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life * 0.35;
+    ctx.fillStyle = p.hot ? '#ffb070' : '#9fb6cc';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+  }
+  if (smoke.length > 160) smoke.splice(0, smoke.length - 160);
+  ctx.globalAlpha = 1;
+  // load gauge on the hall: a needle from 0 to 100% GPU
+  const gx = x + 83, gy = ground - 20, gr = 13;
+  ctx.strokeStyle = '#16324f'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(gx, gy, gr, Math.PI, 2 * Math.PI); ctx.stroke();
+  ctx.strokeStyle = plant.util > 85 ? '#ff6030' : PALETTE.green;
+  ctx.beginPath(); ctx.arc(gx, gy, gr, Math.PI, Math.PI + Math.PI * plant.util / 100); ctx.stroke();
+  const a = Math.PI + Math.PI * plant.util / 100;
+  ctx.strokeStyle = PALETTE.text; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + Math.cos(a) * (gr - 3), gy + Math.sin(a) * (gr - 3)); ctx.stroke();
+  // VRAM as a battery beside the tower
+  const bx = x + 52, by = ground - 40;
+  ctx.strokeStyle = '#5a7fa0'; ctx.lineWidth = 1;
+  ctx.strokeRect(bx, by, 6, 24);
+  ctx.fillStyle = plant.vram > 85 ? '#ff6030' : PALETTE.cyan;
+  const fh = 22 * Math.min(1, plant.vram / 100);
+  ctx.fillRect(bx + 1, by + 23 - fh, 4, fh);
+  // label
+  ctx.font = '8px ui-monospace, monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#9fb6cc';
+  ctx.fillText('power plant', x + w / 2, ground + 3);
+  ctx.fillStyle = '#5a7fa0';
+  ctx.fillText('gpu ' + plant.util + '%  vram ' + plant.vram + '%', x + w / 2, ground + 13);
+  ctx.restore();
+  buildingRects.push({ x: x, y: ground - 80, w: w, h: 80, plant: true });
+}
+
+function drawSkyline(t, dt) {
+  buildingRects = [];
+  const sh = skylineH();
+  if (!sh) return;
+  const ground = MARGIN_TOP + sh;
+  // street line the buildings stand on
+  ctx.save();
+  ctx.strokeStyle = '#16324f'; ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.8;
+  ctx.beginPath(); ctx.moveTo(10, ground + 0.5); ctx.lineTo(W - 10, ground + 0.5); ctx.stroke();
+  ctx.restore();
+  for (const slot of skylineSlots()) {
+    drawBuilding(slot, t);
+    buildingRects.push({ x: slot.x, y: slot.y, w: slot.w, h: slot.h + 22, b: slot.b });
+  }
+  drawPowerPlant(t, dt);
+}
+
+function doorFor(sp) {
+  const fam = familyOf(sp.id);
+  for (const slot of skylineSlots()) {
+    if (slot.b.kind === 'agent' && slot.b.family === fam) return slot.door;
+  }
+  return null;
+}
+
+function buildingAt(mx, my) {
+  for (const r of buildingRects) {
+    if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) return r;
+  }
+  return null;
+}
+
+function showBuildingPop(r, mx, my) {
+  const pop = document.getElementById('bpop');
+  let html;
+  if (r.plant) {
+    html = '<div class="bp-title">power plant</div>' +
+      '<div class="bp-row"><span>gpu</span><span>' + esc(plant.name || '?') + '</span></div>' +
+      '<div class="bp-row"><span>load</span><span>' + plant.util + '%</span></div>' +
+      '<div class="bp-row"><span>vram</span><span>' + plant.vram + '%</span></div>' +
+      '<div class="bp-note">smoke follows GPU load; the battery is VRAM.</div>';
+  } else if (r.b.kind === 'workshop') {
+    const b = r.b;
+    html = '<div class="bp-title">growth workshop</div>' +
+      '<div class="bp-row"><span>status</span><span>' + esc(b.state) + '</span></div>' +
+      '<div class="bp-row"><span>validated</span><span>' + fmtNum(b.validated) + '</span></div>' +
+      '<div class="bp-row"><span>failed</span><span>' + fmtNum(b.failed) + '</span></div>' +
+      '<div class="bp-row"><span>pass rate</span><span>' + Math.round((b.pass_rate || 0) * 100) + '%</span></div>' +
+      '<div class="bp-note">the self-improvement loop. ' +
+      (b.state === 'shuttered' ? 'retired in v1.7; its ledger is kept.' : 'running now.') + '</div>';
+  } else {
+    const b = r.b;
+    html = '<div class="bp-title">' + esc(b.family) + '</div>' +
+      '<div class="bp-row"><span>runs</span><span>' + b.runs + '</span></div>' +
+      '<div class="bp-row"><span>on shift</span><span>' + (b.workers || 0) + '</span></div>' +
+      '<div class="bp-row"><span>tokens</span><span>' + fmtNum(b.tokens) + '</span></div>' +
+      '<div class="bp-row"><span>saved</span><span>$' + (b.saved_usd || 0).toFixed(2) + '</span></div>' +
+      '<div class="bp-row"><span>errors</span><span>' + (b.errors || 0) + '</span></div>' +
+      '<div class="bp-row"><span>last run</span><span>' + esc((b.last_run || '--').slice(0, 16).replace('T', ' ')) + '</span></div>' +
+      (b.models && b.models.length ? '<div class="bp-note">' + b.models.map(esc).join(', ') + '</div>' : '');
+  }
+  pop.innerHTML = html;
+  let px = mx + 16, py = my + 12;
+  if (px + 290 > W) px = mx - 296;
+  pop.style.left = px + 'px';
+  pop.style.top = py + 'px';
+  pop.style.display = 'block';
+}
+
+// ---- treasury + trophies ----
+let seenUnlocked = null;   // Set of ids; null until the first poll (baseline)
+let achQueue = [], achShowing = false;
+
+function showNextAch() {
+  if (achShowing || !achQueue.length) return;
+  achShowing = true;
+  const a = achQueue.shift();
+  document.getElementById('achToastT').textContent = a.icon + '  ' + a.title;
+  const el = document.getElementById('achToast');
+  el.classList.add('show');
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => { achShowing = false; showNextAch(); }, 600);
+  }, 4200);
+}
+
+function renderTrophies() {
+  const list = tycoon.achievements || [];
+  document.getElementById('trophies-count').textContent =
+    (tycoon.unlocked || 0) + ' of ' + list.length + ' unlocked';
+  document.getElementById('btnTrophies').textContent =
+    'trophies ' + (tycoon.unlocked || 0) + '/' + list.length;
+  document.getElementById('trophies-grid').innerHTML = list.map(a => {
+    const [have, goal] = a.progress || [0, 1];
+    const pct = Math.round(100 * Math.min(1, have / (goal || 1)));
+    const meta = a.unlocked
+      ? (a.at ? 'unlocked ' + esc(String(a.at).slice(0, 10)) : 'unlocked')
+      : esc(fmtNum(have)) + ' / ' + esc(fmtNum(goal));
+    return '<div class="tro' + (a.unlocked ? ' on' : '') + '">' +
+      '<div class="t-top"><span class="t-ico">' + esc(a.icon) + '</span>' +
+      '<span class="t-name">' + esc(a.title) + '</span></div>' +
+      '<div class="t-desc">' + esc(a.desc) + '</div>' +
+      (a.unlocked ? '' : '<div class="t-bar"><div class="t-fill" style="width:' + pct + '%"></div></div>') +
+      '<div class="t-meta">' + meta + '</div></div>';
+  }).join('');
+}
+
+async function fetchTycoon() {
+  try {
+    const j = await (await fetch('/tycoon')).json();
+    tycoon = j;
+    const tr = j.treasury || {};
+    const fuel = document.getElementById('fuelChip');
+    if (tr.cap) {
+      const pct = Math.round(100 * (tr.tokens_today || 0) / tr.cap);
+      fuel.textContent = 'fuel ' + fmtNum(tr.tokens_today) + ' / ' + fmtNum(tr.cap) + (tr.capped ? ' BREAKER' : '');
+      fuel.className = pct >= 85 || tr.capped ? 'warn' : '';
+    } else {
+      fuel.textContent = 'fuel ' + fmtNum(tr.tokens_today) + ' today';
+      fuel.className = '';
+    }
+    const now = new Set((j.achievements || []).filter(a => a.unlocked).map(a => a.id));
+    if (seenUnlocked) {
+      for (const a of (j.achievements || [])) {
+        if (a.unlocked && !seenUnlocked.has(a.id)) achQueue.push(a);
+      }
+      showNextAch();
+    }
+    seenUnlocked = now;
+    renderTrophies();
+    layoutSprites();
+  } catch (e) {}
+}
+
+document.getElementById('btnTrophies').onclick = () => {
+  const p = document.getElementById('trophies');
+  if (p.classList.toggle('open')) renderTrophies();
+};
+document.getElementById('trophies-close').onclick = () =>
+  document.getElementById('trophies').classList.remove('open');
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('trophies').classList.remove('open');
+});
+
 // ---- demo agents for offline testing ----
 let demoInjected = false;
 function injectDemoIfEmpty() {
@@ -1762,6 +2218,7 @@ function loop(now) {
   updateCrt();
   drawWorld();
   drawDust();
+  drawSkyline(now, dt);
   drawRoomZones();
   drawTethers();
 
@@ -1793,5 +2250,6 @@ setInterval(fetchSaved, 8000); fetchSaved();
 setInterval(fetchBlocked, 5000); fetchBlocked();
 setInterval(fetchEgressCount, 10000); fetchEgressCount();
 setInterval(() => { fetchTree(); fetchState(); }, 1500);
+setInterval(fetchTycoon, 10000); fetchTycoon();
 </script>
 </body></html>

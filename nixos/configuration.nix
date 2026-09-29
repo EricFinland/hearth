@@ -23,6 +23,7 @@
     ./modules/egress.nix
     ./modules/governor.nix
     ./modules/router.nix
+    ./modules/sbom.nix
   ];
 
   # The NixOS release this configuration was written against. Do not change this

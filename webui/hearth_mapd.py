@@ -12,6 +12,8 @@ Endpoints:
   GET /state       JSON snapshot of every agent's current state
   GET /events      server-sent events: one message per new transition
   GET /healthz     liveness check
+  GET /tycoon      v1.7: buildings, achievements, treasury (cached, zero tokens)
+  GET /sbom        v1.7: the system bill of materials page (/sbom.json for data)
 
 Standard library only (http.server + sqlite3). Run with:
   hearth-mapd --port 8770 --db /var/lib/hearth/runs/audit.db
@@ -594,6 +596,86 @@ def read_router():
             "rules": rules.get("rules", []), "path": rpath}
 
 
+# v1.7 "Tycoon": the facility as a game. The heavy lifting (buildings per agent
+# family, achievements, the bill of materials merge) lives in
+# agent/hearth_tycoon.py; this side adds caching and the live inputs (is the
+# growth loop running, what does Ollama report). Achievements read a few
+# small tables, but the map polls, so answers are cached for TYCOON_TTL.
+TYCOON_TTL = 20.0
+_TYCOON_CACHE = {"key": None, "at": 0.0, "data": None}
+_TYCOON_LOCK = threading.Lock()
+DEFAULT_SBOM = os.environ.get("HEARTH_SBOM", "/etc/hearth/sbom.json")
+
+
+def _unit_active(unit):
+    try:
+        r = subprocess.run([SYSTEMCTL, "is-active", unit], capture_output=True,
+                           text=True, timeout=6)
+        return (r.stdout or "").strip() == "active"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def read_tycoon(db, clock=time.monotonic, is_active_fn=None):
+    """Everything the tycoon layer draws: {buildings, achievements, treasury}.
+    Cached per db for TYCOON_TTL seconds. Best-effort: a missing module or a
+    db error yields empty lists, never a crash."""
+    now = clock()
+    with _TYCOON_LOCK:
+        c = _TYCOON_CACHE
+        if c["key"] == db and c["data"] is not None and now - c["at"] < TYCOON_TTL:
+            return c["data"]
+    is_active_fn = is_active_fn or _unit_active
+    grow_active = is_active_fn("hearth-grow.service")
+    blds, ach = [], []
+    _ensure_agent_path()
+    try:
+        import hearth_tycoon as _ty
+        blds = _ty.buildings(db, grow_active=grow_active)
+        ach = _ty.achievements(db)
+    except Exception:  # noqa: BLE001 - the game layer is a nicety, never a crash
+        pass
+    budget = read_budget(db)
+    hist = read_stats_history(db, days=1)
+    data = {
+        "buildings": blds,
+        "achievements": ach,
+        "unlocked": sum(1 for a in ach if a.get("unlocked")),
+        "treasury": {"tokens_today": budget["tokens_today"], "cap": budget["cap"],
+                     "capped": budget["capped"], "runs_today": budget["runs_today"],
+                     "saved_usd": hist["totals"]["saved_usd"],
+                     "lifetime_tokens": hist["totals"]["tokens"],
+                     "lifetime_runs": hist["totals"]["runs"]},
+        "grow_active": grow_active,
+    }
+    with _TYCOON_LOCK:
+        _TYCOON_CACHE.update({"key": db, "at": now, "data": data})
+    return data
+
+
+def read_sbom(sbom_path=None, tags_fn=None):
+    """The v1.7 bill of materials: the build-time document rendered by
+    nixos/modules/sbom.nix merged with the digests Ollama reports right now.
+    tags_fn returns the raw /api/tags body, or None when Ollama is down."""
+    sbom_path = sbom_path or DEFAULT_SBOM
+    if tags_fn is None:
+        def tags_fn():
+            try:
+                with urllib.request.urlopen(OLLAMA_URL.rstrip("/") + "/api/tags",
+                                            timeout=4) as resp:
+                    return resp.read().decode()
+            except (urllib.error.URLError, OSError, ValueError):
+                return None
+    _ensure_agent_path()
+    try:
+        import hearth_tycoon as _ty
+        return _ty.bill_of_materials(sbom_path, tags_fn())
+    except Exception:  # noqa: BLE001 - the page says what is missing instead
+        return {"built": False, "models_live": False, "system": {}, "inputs": [],
+                "modules": [], "services": [], "packages": [], "models": [],
+                "counts": {}}
+
+
 # Test/inject seam for POST /ask: when {"fn": callable} is set, the /ask handler
 # uses it as the chat_fn instead of building one that calls the local model. Kept
 # a one-key dict so tests can set it without a `global` declaration.
@@ -927,7 +1009,7 @@ def grow_daemon_action(action):
         return False, str(exc)
 
 
-LIVE_REPO = "/home/operator/hearth-desktop"
+LIVE_REPO = "/home/operator/hearth"
 PROMOTE_UNIT = "hearth-promote.service"
 PROMOTE_STAGE = "/var/lib/hearth/promote-stage"
 PROMOTE_HISTORY = "/var/lib/hearth/promote-history.tsv"
@@ -1348,6 +1430,16 @@ class Handler(BaseHTTPRequestHandler):
                               "application/json")
         if path == "/metrics":
             return self._send(200, prometheus_metrics(self.db), "text/plain; version=0.0.4; charset=utf-8")
+        if path == "/tycoon":
+            return self._send(200, json.dumps(read_tycoon(self.db)), "application/json")
+        if path == "/achievements":
+            t = read_tycoon(self.db)
+            return self._send(200, json.dumps({"achievements": t["achievements"],
+                                               "unlocked": t["unlocked"]}), "application/json")
+        if path == "/sbom":
+            return self._serve_static("sbom.html", "text/html; charset=utf-8")
+        if path == "/sbom.json":
+            return self._send(200, json.dumps(read_sbom()), "application/json")
         parts = path.strip("/").split("/")
         if len(parts) == 3 and parts[0] == "session" and parts[2] == "events":
             return self._serve_session_events(parts[1])
@@ -2217,6 +2309,69 @@ def _self_test():
             os.environ.pop("HEARTH_ROUTER", None)
         else:
             os.environ["HEARTH_ROUTER"] = prev_router
+
+    # v1.7 "Tycoon": /tycoon serves buildings + achievements + treasury from a
+    # seeded db (cached, keyed by db), /sbom.json merges a rendered sbom with
+    # injected Ollama tags, and both pages are served.
+    tdir = tempfile.mkdtemp(prefix="hearth-tycoon-")
+    tydb = os.path.join(tdir, "audit.db")
+    con = sqlite3.connect(tydb)
+    con.executescript(SCHEMA)
+    con.executemany(
+        "INSERT INTO agent_runs (agent_name, run_id, started_at, finished_at, "
+        "tokens_in, tokens_out, cost_usd, latency_ms, error, model) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [("web-1ec9641b", "r1", "2026-09-01T10:00:00", "2026-09-01T10:00:01", 10, 5, 0, 5, None, "a"),
+         ("web-2fd0a1c3", "r2", "2026-09-02T10:00:00", "2026-09-02T10:00:01", 10, 5, 0, 5, None, "b"),
+         ("pulse", "r3", "2026-09-03T10:00:00", "2026-09-03T10:00:01", 1, 1, 0, 5, "x", "a")])
+    con.commit(); con.close()
+    probes = {"n": 0}
+
+    def _fake_active(unit):
+        probes["n"] += 1
+        return False
+    _TYCOON_CACHE.update({"key": None, "at": 0.0, "data": None})
+    ty = read_tycoon(tydb, clock=lambda: 1000.0, is_active_fn=_fake_active)
+    fams = {b["family"]: b for b in ty["buildings"]}
+    assert fams["web"]["runs"] == 2 and fams["pulse"]["errors"] == 1, ty["buildings"]
+    assert ty["treasury"]["lifetime_runs"] == 3 and ty["grow_active"] is False, ty["treasury"]
+    ach = {a["id"]: a for a in ty["achievements"]}
+    assert ach["first-light"]["unlocked"] and not ach["centurion"]["unlocked"], ach
+    assert ty["unlocked"] == sum(1 for a in ty["achievements"] if a["unlocked"])
+    assert read_tycoon(tydb, clock=lambda: 1005.0, is_active_fn=_fake_active) is ty
+    assert probes["n"] == 1, "a warm cache must not re-probe systemd"
+    assert read_tycoon(tydb, clock=lambda: 1000.0 + TYCOON_TTL + 1,
+                       is_active_fn=_fake_active) is not ty, "cache must expire"
+    sbp = os.path.join(tdir, "sbom.json")
+    with open(sbp, "w") as fh:
+        json.dump({"system": {"hostName": "t"}, "inputs": [], "modules": [],
+                   "services": [], "packages": [{"name": "git", "version": "2",
+                                                 "path": "/nix/store/x-git-2"}]}, fh)
+    sb = read_sbom(sbp, tags_fn=lambda: json.dumps({"models": [{"name": "m:1", "digest": "d"}]}))
+    assert sb["built"] and sb["models"][0]["digest"] == "d" and sb["counts"]["packages"] == 1, sb
+    assert read_sbom(sbp, tags_fn=lambda: None)["models_live"] is False
+    assert read_sbom(os.path.join(tdir, "missing.json"), tags_fn=lambda: None)["built"] is False
+    _TYCOON_CACHE.update({"key": None, "at": 0.0, "data": None})
+    srv_t = make_server("127.0.0.1", 0, tydb, DEFAULT_STATIC)
+    threading.Thread(target=srv_t.serve_forever, daemon=True).start()
+    base_t = "http://127.0.0.1:{}".format(srv_t.server_address[1])
+    try:
+        with urllib.request.urlopen(base_t + "/tycoon", timeout=15) as resp:
+            got = json.loads(resp.read().decode())
+        assert {"buildings", "achievements", "treasury", "unlocked"} <= set(got), got.keys()
+        with urllib.request.urlopen(base_t + "/achievements", timeout=15) as resp:
+            got = json.loads(resp.read().decode())
+        assert len(got["achievements"]) >= 10 and got["unlocked"] >= 1, got
+        with urllib.request.urlopen(base_t + "/sbom.json", timeout=15) as resp:
+            got = json.loads(resp.read().decode())
+        assert "counts" in got and "built" in got, got
+        for page in ("/sbom", "/world"):
+            with urllib.request.urlopen(base_t + page, timeout=5) as resp:
+                assert (resp.headers.get("Content-Type") or "").startswith("text/html"), page
+                assert resp.read(), page
+    finally:
+        srv_t.shutdown()
+        srv_t.server_close()
+        _TYCOON_CACHE.update({"key": None, "at": 0.0, "data": None})
 
     print("hearth-mapd self-test OK")
     return 0

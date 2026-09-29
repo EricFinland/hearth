@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>hearth bill of materials</title>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; min-height:100%; background:#05080f; color:#cfe6ff;
+    font-family: ui-monospace, Menlo, Consolas, monospace; }
+  a { color:#5fd0ff; }
+  .card { background:rgba(8,14,24,0.62); border:1px solid #16324f; border-radius:10px;
+    padding:10px 12px; margin-bottom:14px; }
+  .title { color:#5fd0ff; text-transform:uppercase; letter-spacing:.08em; font-size:12px; margin-bottom:8px;
+    display:flex; align-items:baseline; gap:10px; }
+  .title .n { color:#8a93a0; font-size:10px; letter-spacing:.04em; }
+  .muted { color:#8a93a0; font-size:12px; }
+  .navlink { font-size:10px; color:#8a93a0; text-decoration:none;
+    border:1px solid #16324f; padding:2px 8px; border-radius:6px; background:rgba(5,8,15,0.7); }
+  .navlink:hover { color:#5fd0ff; border-color:#5fd0ff; }
+  #wrap { max-width:1100px; margin:0 auto; padding:14px; }
+  #top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  #top h1 { font-size:14px; color:#5fd0ff; text-transform:uppercase; letter-spacing:.1em; margin:0; }
+  #top .spacer { margin-left:auto; }
+  #q { background:#0e2236; border:1px solid #16324f; color:#cfe6ff; padding:6px 10px;
+    border-radius:6px; font-family:inherit; font-size:12px; outline:none; min-width:220px; }
+  #q:focus { border-color:#5fd0ff; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px; }
+  .tile { border:1px solid #16324f; border-radius:8px; padding:8px 10px; background:#070d17; }
+  .tile .k { font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:#8a93a0; }
+  .tile .v { font-size:15px; color:#cfe6ff; margin-top:3px; word-break:break-all; }
+  .tile .v.small { font-size:11px; }
+  table { width:100%; border-collapse:collapse; font-size:11px; }
+  th { text-align:left; color:#8a93a0; font-weight:normal; text-transform:uppercase;
+    letter-spacing:.06em; font-size:9px; padding:4px 6px; border-bottom:1px solid #16324f; }
+  td { padding:4px 6px; border-bottom:1px solid #0e2236; vertical-align:top; }
+  tr:hover td { background:rgba(95,208,255,0.04); }
+  .hash { color:#9fb6cc; cursor:pointer; word-break:break-all; }
+  .hash:hover { color:#5fd0ff; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { font-size:10px; border:1px solid #16324f; border-radius:6px; padding:2px 8px; }
+  .chip.on { color:#6fcf7f; border-color:#1a4a2a; background:rgba(111,207,127,0.06); }
+  .chip.off { color:#5a6a7a; }
+  .warn { color:#f0a030; font-size:11px; margin:4px 0 8px; }
+  .scroll { max-height:520px; overflow:auto; }
+  #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%);
+    background:#0e3a20; border:1px solid #1c6; color:#6fcf7f; padding:6px 18px;
+    border-radius:20px; font-size:12px; opacity:0; transition:opacity .3s; pointer-events:none; }
+  #toast.show { opacity:1; }
+  @media (max-width:720px) {
+    #wrap { padding:10px; }
+    #q { min-width:0; flex:1; }
+    .hide-sm { display:none; }
+  }
+</style></head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <h1>&#x1F4DC; bill of materials</h1>
+    <a class="navlink" href="/world">world</a>
+    <a class="navlink" href="/command">command</a>
+    <a class="navlink" href="/sbom.json">json</a>
+    <span class="spacer"></span>
+    <input id="q" placeholder="filter packages, inputs, models..." autocomplete="off" />
+  </div>
+  <div class="card">
+    <div class="title">this machine</div>
+    <div class="muted" style="margin-bottom:8px">
+      Every package, model, and module on this box, with the hash that pins it.
+      Generated from the flake at build time; models are read live from Ollama.
+      Click any hash to copy it.
+    </div>
+    <div id="missing"></div>
+    <div class="tiles" id="tiles"></div>
+  </div>
+  <div class="card">
+    <div class="title">hearth modules <span class="n" id="nModules"></span></div>
+    <div class="chips" id="modules"></div>
+  </div>
+  <div class="card">
+    <div class="title">flake inputs <span class="n" id="nInputs"></span></div>
+    <div class="scroll"><table><thead><tr>
+      <th>input</th><th>source</th><th>rev</th><th class="hide-sm">narHash</th><th class="hide-sm">locked</th>
+    </tr></thead><tbody id="inputs"></tbody></table></div>
+  </div>
+  <div class="card">
+    <div class="title">models <span class="n" id="nModels"></span></div>
+    <div class="scroll"><table><thead><tr>
+      <th>model</th><th>digest</th><th class="hide-sm">params</th><th class="hide-sm">quant</th><th>size</th>
+    </tr></thead><tbody id="models"></tbody></table></div>
+  </div>
+  <div class="card">
+    <div class="title">hearth services <span class="n" id="nServices"></span></div>
+    <div class="scroll"><table><thead><tr>
+      <th>unit</th><th>description</th>
+    </tr></thead><tbody id="services"></tbody></table></div>
+  </div>
+  <div class="card">
+    <div class="title">system packages <span class="n" id="nPackages"></span></div>
+    <div class="scroll"><table><thead><tr>
+      <th>package</th><th>version</th><th>store hash</th>
+    </tr></thead><tbody id="packages"></tbody></table></div>
+  </div>
+</div>
+<div id="toast">copied</div>
+<script>
+let DOC = null;
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function hashOf(path) {
+  // /nix/store/<32-char hash>-name-version -> hash
+  const m = /\/nix\/store\/([0-9a-z]{32})-/.exec(path || '');
+  return m ? m[1] : '';
+}
+function bytes(n) {
+  if (!n) return '';
+  const u = ['B','KB','MB','GB','TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + ' ' + u[i];
+}
+function hashCell(full, shown) {
+  if (!full) return '<span class="muted">-</span>';
+  return '<span class="hash" data-copy="' + esc(full) + '" title="' + esc(full) + '">' +
+    esc(shown || full) + '</span>';
+}
+function tile(k, v, small) {
+  return '<div class="tile"><div class="k">' + esc(k) + '</div><div class="v' +
+    (small ? ' small' : '') + '">' + esc(v) + '</div></div>';
+}
+function matches(q, ...fields) {
+  if (!q) return true;
+  return fields.some(f => String(f || '').toLowerCase().includes(q));
+}
+
+function render() {
+  if (!DOC) return;
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const sys = DOC.system || {};
+  const c = DOC.counts || {};
+  const miss = [];
+  if (!DOC.built) miss.push('No build-time manifest found at /etc/hearth/sbom.json. Enable hearth.sbom and rebuild.');
+  if (!DOC.models_live) miss.push('Ollama did not answer, so model digests are missing.');
+  document.getElementById('missing').innerHTML = miss.map(m => '<div class="warn">' + esc(m) + '</div>').join('');
+  document.getElementById('tiles').innerHTML =
+    tile('host', sys.hostName || '?') +
+    tile('nixos', sys.nixosVersion || '?', true) +
+    tile('config rev', (sys.configurationRevision || 'unknown').slice(0, 12), true) +
+    tile('packages', (c.packages || 0).toLocaleString()) +
+    tile('flake inputs', c.inputs || 0) +
+    tile('models', c.models || 0) +
+    tile('kernel', sys.kernel || '?', true);
+
+  const mods = (DOC.modules || []).filter(m => matches(q, m.name));
+  document.getElementById('nModules').textContent =
+    (DOC.modules || []).filter(m => m.enabled).length + ' of ' + (DOC.modules || []).length + ' on';
+  document.getElementById('modules').innerHTML = mods.map(m =>
+    '<span class="chip ' + (m.enabled ? 'on' : 'off') + '">' + esc(m.name) + (m.enabled ? '' : ' (off)') + '</span>'
+  ).join('') || '<span class="muted">none</span>';
+
+  const inputs = (DOC.inputs || []).filter(i => matches(q, i.name, i.source, i.rev, i.narHash));
+  document.getElementById('nInputs').textContent = inputs.length;
+  document.getElementById('inputs').innerHTML = inputs.map(i =>
+    '<tr><td>' + esc(i.name) + '</td><td>' + esc(i.source) + '</td><td>' +
+    hashCell(i.rev, (i.rev || '').slice(0, 12)) + '</td><td class="hide-sm">' +
+    hashCell(i.narHash, (i.narHash || '').slice(0, 24) + ((i.narHash || '').length > 24 ? '..' : '')) +
+    '</td><td class="hide-sm">' + esc(i.lastModified ? new Date(i.lastModified * 1000).toISOString().slice(0, 10) : '') +
+    '</td></tr>').join('') || '<tr><td colspan="5" class="muted">none</td></tr>';
+
+  const models = (DOC.models || []).filter(m => matches(q, m.name, m.digest, m.family));
+  document.getElementById('nModels').textContent = models.length;
+  document.getElementById('models').innerHTML = models.map(m =>
+    '<tr><td>' + esc(m.name) + '</td><td>' + hashCell(m.digest, (m.digest || '').slice(0, 16)) +
+    '</td><td class="hide-sm">' + esc(m.parameters) + '</td><td class="hide-sm">' + esc(m.quantization) +
+    '</td><td>' + esc(bytes(m.size)) + '</td></tr>').join('') ||
+    '<tr><td colspan="5" class="muted">none</td></tr>';
+
+  const svcs = (DOC.services || []).filter(s => matches(q, s.name, s.description));
+  document.getElementById('nServices').textContent = svcs.length;
+  document.getElementById('services').innerHTML = svcs.map(s =>
+    '<tr><td>' + esc(s.name) + '</td><td class="muted">' + esc(s.description) + '</td></tr>').join('') ||
+    '<tr><td colspan="2" class="muted">none</td></tr>';
+
+  const pk = (DOC.packages || []).filter(p => matches(q, p.name, p.version, p.path));
+  document.getElementById('nPackages').textContent =
+    pk.length === (DOC.packages || []).length ? pk.length : pk.length + ' of ' + (DOC.packages || []).length;
+  document.getElementById('packages').innerHTML = pk.map(p =>
+    '<tr><td>' + esc(p.name) + '</td><td>' + esc(p.version) + '</td><td>' +
+    hashCell(p.path, hashOf(p.path)) + '</td></tr>').join('') ||
+    '<tr><td colspan="3" class="muted">none</td></tr>';
+}
+
+document.addEventListener('click', async e => {
+  const t = e.target.closest('[data-copy]');
+  if (!t) return;
+  try {
+    await navigator.clipboard.writeText(t.dataset.copy);
+    const el = document.getElementById('toast');
+    el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 1200);
+  } catch (err) {}
+});
+document.getElementById('q').addEventListener('input', render);
+
+(async () => {
+  try {
+    DOC = await (await fetch('/sbom.json')).json();
+  } catch (e) {
+    DOC = {built: false, models_live: false, counts: {}};
+  }
+  render();
+})();
+</script>
+</body></html>
