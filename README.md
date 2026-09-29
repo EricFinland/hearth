@@ -25,7 +25,7 @@ Most people run local agents with full system privileges and no record of what t
 
 > It is not a custom kernel or a remastered distro. It is a declarative NixOS system you `nixos-rebuild switch` into existence.
 
-> **Status: v1.5, stable.** The whole stack runs on real hardware: sandboxed agents, the audit log, the reproducible flake, the web cockpit, an OpenAI-compatible API, a local knowledge base, a standing-missions scheduler, and the self-improvement loop (which only ever produces reviewable, gated branches, never auto-changing a running system). Since 1.0, per-run containment (tool and host allowlists, with hosts enforced at the kernel), honeyfile tripwires, a flight recorder with a replay viewer, and a governor (a daily spend breaker plus push alerts) have landed on top. Local model quality is the honest ceiling. See the [CHANGELOG](CHANGELOG.md).
+> **Status: v1.7, stable.** The whole stack runs on real hardware: sandboxed agents, the audit log, the reproducible flake, the web cockpit, an OpenAI-compatible API, a local knowledge base, a standing-missions scheduler, and the self-improvement loop (which only ever produces reviewable, gated branches, never auto-changing a running system; paused on the reference box after a 95-day run, see the [retrospective](https://ericfinland.github.io/hearth/project/growth-retrospective/)). Since 1.0, per-run containment (tool and host allowlists, with hosts enforced at the kernel), honeyfile tripwires, a flight recorder with a replay viewer, a governor (a daily spend breaker plus push alerts), a declarative model router, and a tycoon map with a system bill of materials have landed on top. Local model quality is the honest ceiling. See the [CHANGELOG](CHANGELOG.md).
 
 ## What makes it different
 
@@ -140,6 +140,8 @@ curl http://your-hearth:8770/metrics
 - **Spend circuit breaker:** a hard daily token budget across all runs; at the cap, running agents halt gracefully and new runs refuse to start until local midnight.
 - **Unified alerting:** one fan-out pushes every alert to Telegram and ntfy, firing on errors, tripwire trips, and budget breaches so the box can reach your phone.
 - **Declarative missions:** scheduled cron-as-flake missions you define in the flake, rendered read-only and merged with cockpit-created ones, each launch carrying its capability manifest and egress allowlist.
+- **Tycoon map:** agent families as buildings, runs as workers walking to their door, a power plant driven by the GPU, a fuel gauge against the daily cap, and thirteen trophies computed from the audit log.
+- **System bill of materials:** `/sbom` lists every flake input, package, model, and module on the box with the hash that pins it, generated from the flake at build time.
 - **Observability:** a Prometheus `/metrics` endpoint, a usage-over-time stats view, and `hearth-doctor` for a one-command health check.
 - **Agent credentials by name:** keys are substituted at request time via systemd credentials, so the model never sees the secret value.
 - **More agent tools:** grep, multi-file edit, directory tree, web-to-knowledge, and more.

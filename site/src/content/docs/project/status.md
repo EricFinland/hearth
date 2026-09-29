@@ -5,7 +5,7 @@ description: A snapshot briefing of what is built, what is stubbed, and what nee
 
 Read this first. It is the morning briefing for hearth.
 
-**Current release: v1.5.0 (Governor).** The stack runs on real hardware. Local
+**Current release: v1.7.0 (Tycoon).** The stack runs on real hardware. Local
 model quality is the honest ceiling; everything below is built and shipped
 unless this page says otherwise. For what comes next, see the
 [Roadmap](/hearth/project/roadmap/).
@@ -19,7 +19,7 @@ agents, sandbox, observability, networking, shell, mcp, egress, tripwire), a
 concrete workstation host profile, the agent runtime, build/deploy/bootstrap
 scripts, a GitHub Actions flake-check workflow, and the full docs.
 
-The shipped capability set at v1.5:
+The shipped capability set at v1.7:
 
 - **Sandboxed agents** as ephemeral systemd units (no writes outside their
   workspace, no host secrets, no privilege escalation), with permission modes
@@ -43,6 +43,16 @@ The shipped capability set at v1.5:
 - **The governor** (v1.5): a spend circuit breaker (a hard daily token cap),
   unified alerting to Telegram and ntfy, and declarative cron-as-flake
   missions. See [The governor](/hearth/operations/governor/).
+- **The router** (v1.6): rule-based model selection declared in the flake, and
+  plain-English questions over the audit log answered by a local model. See
+  [Model router](/hearth/operations/router/).
+- **The tycoon map and bill of materials** (v1.7): agent families as buildings,
+  runs as workers, a GPU power plant, a fuel gauge, thirteen trophies, and a
+  page listing every package, model, and module with its pinned hash. See
+  [Tycoon map & bill of materials](/hearth/operations/tycoon/).
+- **The growth loop is paused** on the reference box as of v1.7. It is still
+  in the tree and still opt-in; the
+  [retrospective](/hearth/project/growth-retrospective/) has the numbers.
 
 ## Decisions made (the three non-obvious ones)
 

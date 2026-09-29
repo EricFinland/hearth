@@ -3,13 +3,13 @@ title: Roadmap
 description: The staged release plan from v1.2 to v2.0.
 ---
 
-hearth is at **v1.6** (see the [changelog](https://github.com/EricFinland/hearth/blob/main/CHANGELOG.md)
+hearth is at **v1.7** (see the [changelog](https://github.com/EricFinland/hearth/blob/main/CHANGELOG.md)
 and the [status page](/hearth/project/status/)). This page is the staged plan to
 v2.0, sequenced the same way the v0.x line marched to 1.0: each release is one
 coherent story, ships something demoable, and deepens at least one of the three
 guarantees (sandboxed by default, every run audited, reproducible from boot).
-Replay (v1.3), Wall (v1.4), Governor (v1.5), and Router (v1.6) have shipped;
-Tycoon is next.
+Replay (v1.3), Wall (v1.4), Governor (v1.5), Router (v1.6), and Tycoon (v1.7)
+have shipped; Witness is next.
 
 Two commitments already made in the changelog land exactly where promised:
 OS-level egress enforcement in v1.4, and auditd raw-open decoy detection in v2.0.
@@ -56,15 +56,21 @@ v2.0 need it to exist), and it is an instant demo.
   answered by a local model over the audit database. All local, and hearth
   eating its own dog food.
 
-## v1.7 "Tycoon" (spectacle payoff)
+## v1.7 "Tycoon" (spectacle payoff), shipped
 
-- **Full tycoon-ification of the map.** Agents as buildings, runs as workers
-  walking to them, cost as resources, the GPU and memory feed as a power-plant
-  gauge, tripwires as facility alarms (shipped in v1.2), egress blocks as
-  bounced couriers.
-- **Achievements.** Gamified uptime, run counts, and savings versus cloud.
+- **Full tycoon-ification of the map.** Agent families as buildings, runs as
+  workers walking to their door, today's token spend as fuel, the GPU and VRAM
+  as a power plant, tripwires as facility alarms (shipped in v1.2), egress
+  blocks as bounced couriers (shipped in v1.4).
+- **Achievements.** Thirteen trophies computed from the audit log: run counts,
+  a million local tokens, savings versus cloud, streaks, the wall holding, a
+  tripwire catch, and more.
 - **System Bill of Materials page.** Every package, model, and module with its
-  pinned hash, auto-generated from the flake. Legibility as spectacle.
+  pinned hash, generated from the flake at build time. Legibility as spectacle.
+
+See [Tycoon map & bill of materials](/hearth/operations/tycoon/). The same
+release paused the growth loop on the reference box; the
+[retrospective](/hearth/project/growth-retrospective/) explains why.
 
 ## v1.8 "Witness" (two projects, one story)
 

@@ -178,9 +178,21 @@ that proposes, validates, and compounds small self-improvements. Opt-in.
 | Option | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `hearth.grow.model` | string | `"qwen2.5-coder"` | The local model the growth loop uses. |
-| `hearth.grow.sourceRepo` | string | `"/home/operator/hearth-desktop"` | The live config the grow repo is seeded from. |
+| `hearth.grow.sourceRepo` | string | `"/home/operator/hearth"` | The live config the grow repo is seeded from (the git checkout the box is rebuilt from). |
 | `hearth.grow.cyclesPerRun` | int | `12` | Self-improvement cycles per service run before it restarts. |
 | `hearth.grow.restartSec` | int | `300` | Pause between growth runs, so the box is not pegged. |
+
+## hearth.sbom.enable
+
+- **Type:** boolean
+- **Default:** `true`
+- **Module:** `nixos/modules/sbom.nix`
+
+Renders the system [bill of materials](/hearth/operations/tycoon/#the-bill-of-materials)
+to `/etc/hearth/sbom.json` at build time: flake inputs with their locked revs
+and `narHash`, every system and per-user package with its store path, the
+`hearth.*` modules and whether each is on, and the `hearth-*` services. The map
+serves it at `/sbom`. Pure configuration, no service.
 
 ## hearth.creator.enable
 

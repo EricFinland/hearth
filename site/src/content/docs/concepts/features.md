@@ -34,6 +34,9 @@ description: What hearth does today, the differentiators, and what is captured f
 - Unified alerting: push notifications to Telegram and ntfy on error, tripwire, and budget breach (successful completion opt-in), best-effort so a failed alert never blocks a run. See [The governor](/hearth/operations/governor/).
 - Declarative scheduled missions (cron-as-flake): declare missions as `hearth.schedule.missions.<name>` in the flake, and each launch carries its own capability manifest and egress allowlist. See [Standing missions](/hearth/operations/scheduler/).
 - Security scoreboard: `GET /security` and a cockpit panel showing what containment is active on the box right now (remote auth, rate limit, manifests, egress activity, tripwire status, breaker and alerting state, daemon health).
+- Declarative model router (v1.6): rule-based model selection in the flake, plus plain-English questions over the audit log. See [Model router](/hearth/operations/router/).
+- Tycoon map (v1.7): agent families as buildings, runs as workers walking to their door, a GPU power plant, a fuel gauge against the daily cap, and thirteen trophies computed from the audit log. See [Tycoon map & bill of materials](/hearth/operations/tycoon/).
+- System bill of materials (v1.7): `/sbom` lists every flake input, package, model, and hearth module with the hash that pins it, generated at build time. See [Tycoon map & bill of materials](/hearth/operations/tycoon/#the-bill-of-materials).
 - Cloud cost saved: a live counter of what your runs would have cost on a frontier cloud model, in the world HUD and the cockpit stats panel.
 - MCP audit gate: no MCP server is allowed to start until it has an approval file at /var/lib/hearth/mcp-audit/{name}.approved. Stub is in place; wiring it to a real scanner is a backlog item.
 - Declarative model manifest: models are listed in the NixOS config and pulled automatically on activation.
@@ -46,8 +49,6 @@ On the [roadmap](/hearth/project/roadmap/):
 - auditd raw-open decoy detection: catch an agent that opens a bait file directly, without going through a tool (v2.0).
 - Syscall anomaly baseline: record the syscall profile of normal runs and flag deviation, observe-and-alert rather than auto-kill (v2.0).
 - Signed flight-recorder export: export any replay as a signed artifact, shareable proof of exactly what an agent did (v2.0).
-- Declarative model router: rule-based model selection in the flake, a cheap model for easy tasks and escalation on failure (v1.6).
-- Full tycoon map: agents as buildings, runs as workers, cost as resources, plus achievements and a system bill-of-materials page (v1.7).
 - witness integration: a first-class NixOS module that ships local browser-agent observability and deep-links audit rows to its DOM-diff replay (v1.8).
 - Deep research, audited: a research agent that fans out through the egress allowlist, pulls sources into the knowledge base, and synthesizes a cited report, every fetch in the egress log (v1.9).
 - Multimodal vision: local vision models via Ollama so agents can read screenshots, charts, and PDFs (v2.1).

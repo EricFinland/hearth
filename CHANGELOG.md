@@ -3,6 +3,58 @@
 All notable changes to hearth. Versions follow semantic versioning; each is a
 git tag and a GitHub release.
 
+## v1.7.0 - Tycoon
+
+The world view becomes a facility you can read at a glance, and the machine
+gets a page that lists every hash that pins it. The spectacle payoff for
+everything the audit log has been recording since v0.1, and still zero tokens.
+
+- **Buildings and workers**: a skyline across the top of the world view with
+  one building per agent family (the run name with its random suffix
+  stripped). Height grows with the log of lifetime runs, windows light while a
+  worker is on shift, a red badge counts errored runs, and hovering shows runs,
+  tokens, dollars saved, errors, last run, and models. A run that is not part
+  of a crew now spawns at the entrance, walks to its family's door, and queues
+  there while it works. On narrow screens the quietest buildings give up their
+  lots first.
+- **Power plant**: a cooling tower and turbine hall whose smoke follows GPU
+  utilization, with a load gauge and a VRAM battery.
+- **Fuel**: an HUD chip for today's token spend, read against the governor's
+  daily cap when one is set (red at 85%, BREAKER when the circuit breaker is
+  open).
+- **Trophies**: 13 achievements computed from the audit log (First light,
+  Busy floor, Centurion, Megawatt, Cloud dodger, Polyglot, Night shift,
+  Seven-day streak, Clean sheet, The wall holds, Honeypot, Black box,
+  Self-made), each with progress and, where the log can say, the date it
+  unlocked. A trophy room in the launch bar, and a gold card when one unlocks
+  while the map is open.
+- **System bill of materials**: `nixos/modules/sbom.nix` (on by default,
+  `hearth.sbom.enable`) renders `/etc/hearth/sbom.json` at build time with
+  every flake input's locked rev and `narHash`, every system and per-user
+  package with its store path, the `hearth.*` modules and whether each is on,
+  and the `hearth-*` services. `GET /sbom` merges it with the digests Ollama
+  reports and renders one searchable page; `GET /sbom.json` is the data.
+- **Configuration revision**: the flake sets `system.configurationRevision`
+  from the git revision, so the bill of materials and
+  `nixos-version --configuration-revision` say exactly which commit is running.
+- **Endpoints**: `GET /tycoon` (buildings, achievements, treasury; cached 20s,
+  reads only small tables, never the event or transcript tables) and
+  `GET /achievements`. The logic lives in `agent/hearth_tycoon.py`, with a CLI
+  and a self-test; `hearth-mapd --self-test` covers the new routes.
+- **Growth loop paused on the reference blade**: after 95 days, 15,074
+  attempts, and a 14.7% gate pass rate with nothing worth promoting, the
+  blade sets `hearth.grow.enable = false`. The ledger is kept and shows on the
+  map as a shuttered workshop. The full account is on the new
+  [growth loop retrospective](https://ericfinland.github.io/hearth/project/growth-retrospective/)
+  page.
+- **Live-config default**: the growth loop's `sourceRepo`, the agent
+  self-knowledge tools (`HEARTH_REPO`), and the promote diff now default to
+  `/home/operator/hearth`, the git checkout the box is rebuilt from, instead of
+  a hand-copied snapshot directory that had drifted.
+- **Fix**: the world view's render loop no longer dies when the page loads in
+  a collapsed or hidden viewport (a negative gradient radius threw and stopped
+  every later frame).
+
 ## v1.6.0 - Router
 
 Rule-based model selection declared in the flake, so the right local model runs

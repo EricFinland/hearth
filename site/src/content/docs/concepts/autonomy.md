@@ -77,6 +77,13 @@ deliberate step (see Promote below).
 
 ## Growth daemon
 
+:::note[Paused on the reference box]
+The growth daemon ran on the reference blade for 95 days and is paused there as
+of v1.7: 15,074 attempts, a 14.7% gate pass rate, and nothing worth promoting.
+The [growth loop retrospective](/hearth/project/growth-retrospective/) has the
+full account and what would make it worth turning back on.
+:::
+
 The growth daemon is the always-on version of self-evolve, and it compounds.
 Opt in with [`hearth.grow.enable`](/hearth/reference/configuration/#hearthgrowenable).
 Each cycle it:
@@ -120,8 +127,10 @@ generation. If all are up, it lets the growth daemon reseed on the new config.
 
 Lessons live in a `learnings` table in the audit database. The `remember` and
 `recall` tools let any agent write an insight and pull relevant ones back later by
-keyword. The growth daemon uses this to avoid repeating improvements that already
-failed, which is what makes the loop get smarter rather than just busier.
+keyword. The growth daemon recalls these before proposing, to steer away from
+improvements that already failed. In practice keyword recall was not enough to
+stop a small model from re-proposing the same idea in new words; see the
+[retrospective](/hearth/project/growth-retrospective/#what-did-not).
 
 ## Self-knowledge tools
 

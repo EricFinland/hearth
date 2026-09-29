@@ -24,7 +24,12 @@ dedicated window, and `Meta+A` toggles a fullscreen view.
 - **Crew rooms and tethers.** A manager and its specialists are grouped into a
   labelled room (the room shows the mission goal), with dashed lines tethering
   children to their parent. Ungrouped agents sit in a free-agent zone.
-- **A HUD** across the top with live GPU, VRAM, and RAM bars and an agent count.
+- **A skyline** (v1.7) across the top: one building per agent family, workers
+  walking to their door, a power plant fed by the GPU, and the growth workshop.
+  See [Tycoon map & bill of materials](/hearth/operations/tycoon/).
+- **A HUD** across the top with live GPU, VRAM, and RAM bars, an agent count,
+  dollars saved, egress blocks, today's fuel, and a link to the
+  [bill of materials](/hearth/operations/tycoon/#the-bill-of-materials).
 - **A minimap** when the facility gets busy.
 - **CRT effects** (scanlines, vignette, a subtle flicker) you can toggle.
 
@@ -34,6 +39,8 @@ dedicated window, and `Meta+A` toggles a fullscreen view.
   (swarm), a single agent, or the growth loop.
 - **Click an agent** to open an inspect panel with its details and a scrollable
   transcript of its recent steps.
+- **Open the trophy room** to see which achievements the facility has
+  unlocked and how close the rest are.
 - **Open the ledger panel** for the [self-improvement](/hearth/concepts/autonomy/#the-self-improvement-ledger)
   view: the growth daemon's status, validated and merged counts, the lessons log,
   and the promote controls (review diff, build-check, apply to live, roll back).
