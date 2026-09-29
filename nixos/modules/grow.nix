@@ -70,7 +70,7 @@ in
     };
     sourceRepo = lib.mkOption {
       type = lib.types.str;
-      default = "/home/operator/hearth-desktop";
+      default = "/home/operator/hearth";
       description = "Live config the grow repo is seeded from on first run.";
     };
     cyclesPerRun = lib.mkOption {

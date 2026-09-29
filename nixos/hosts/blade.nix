@@ -33,10 +33,13 @@
   # the operator's per-user theming/panel/conky/command-toggle (plasma-manager).
   hearth.desktop.enable = true;
 
-  # Always-on self-improvement: the box continuously proposes, implements, and
-  # validates small changes to its own config on isolated branches (never the
-  # live system) and learns from each one. Paced so it does not peg the GPU.
-  hearth.grow.enable = true;
+  # Always-on self-improvement ran here from 2026-06-26 to 2026-09-29: 1,064
+  # batches, 15,074 attempts, 2,223 validated (about 15%), and the validated
+  # work kept circling the same few "add a config option" ideas. It is paused
+  # as of v1.7 so the GPU goes back to real work; the ledger stays in the
+  # audit db and the map shows it as a shuttered workshop. See the growth
+  # retrospective in the docs before turning it back on.
+  hearth.grow.enable = false;
 
   # Standing missions: a timer checks the mission registry and dispatches any
   # that are due (the "works while you sleep" layer).

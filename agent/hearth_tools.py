@@ -33,7 +33,7 @@ def _bin(name, fallback):
     return shutil.which(name) or fallback
 
 
-HEARTH_REPO = os.environ.get("HEARTH_REPO", "/home/operator/hearth-desktop")
+HEARTH_REPO = os.environ.get("HEARTH_REPO", "/home/operator/hearth")
 _SYSTEM_PROFILES = "/nix/var/nix/profiles"
 
 
