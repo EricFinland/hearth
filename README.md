@@ -74,21 +74,38 @@ chat    mistral:7b       430     3.2s     $0.00
 
 ```mermaid
 sequenceDiagram
+  autonumber
   actor You
-  participant Agent as Agent (sandboxed)
+  box rgba(95,208,255,0.07) Sandboxed run: ephemeral systemd unit, workspace-only writes
+    participant Agent as Agent loop
+    participant Gate as Permission gate
+    participant Tools as Tools
+  end
   participant Model as Local model
-  participant Tools as Tools (workspace only)
   participant Audit as Audit log
 
-  You->>Agent: goal
+  You->>Agent: goal + manifest (allowed tools, allowed hosts)
   loop until done
+    Note over Agent,Model: Governor checks the daily token cap before every model call
     Agent->>Model: think
-    Model-->>Agent: tool call
-    Agent->>Tools: run · no escape · secrets by name only
-    Tools-->>Agent: result
+    Model-->>Agent: proposed tool call
+    Agent->>Gate: check manifest and risk class
+    alt safe tool in the manifest
+      Gate->>Tools: run
+      Tools-->>Agent: result
+    else dangerous tool (unless bypass mode)
+      Gate->>You: approval request
+      You-->>Gate: approve or deny
+      Gate->>Tools: run only if approved
+      Tools-->>Agent: result
+    else tool not in the manifest
+      Gate-->>Agent: refused
+    end
+    Note over Gate,Tools: Secrets injected by name, never shown to the model.<br/>Egress outside the allowlist is dropped by nftables.<br/>Reading a decoy file trips an alarm.
+    Agent->>Audit: flight recorder step (args, output, verdict, duration)
   end
-  Agent->>Audit: tokens · cost · latency
-  Agent-->>You: result + receipt
+  Agent->>Audit: tokens, cost, latency, errors
+  Agent-->>You: result + receipt, replayable at /replay
 ```
 
 ## Quickstart
