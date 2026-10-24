@@ -7,7 +7,7 @@ known sharp edges, and how to report a problem.
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for a security problem.
+Please do not open a public issue or post in the Discord about a security problem.
 
 - Open a private report via GitHub Security Advisories ("Report a vulnerability"
   on the Security tab). This is the preferred channel, or

@@ -16,3 +16,4 @@ site/.astro/
 # python bytecode
 __pycache__/
 *.pyc
+github_webhooks.txt

@@ -11,6 +11,7 @@
 ![Sandboxed](https://img.shields.io/badge/agents-sandboxed-cc785c?style=flat-square&logo=linux&logoColor=white&labelColor=211c16)
 ![Audited](https://img.shields.io/badge/every%20run-audited-cc785c?style=flat-square&logo=sqlite&logoColor=white&labelColor=211c16)
 ![License](https://img.shields.io/badge/license-MIT-cc785c?style=flat-square&labelColor=211c16)
+[![Discord](https://img.shields.io/discord/1535552732889612348?style=flat-square&logo=discord&logoColor=white&label=discord&labelColor=211c16&color=cc785c)](https://discord.gg/8bathX4UQY)
 [![release](https://img.shields.io/github/v/release/EricFinland/hearth?style=flat-square&labelColor=211c16&color=cc785c)](https://github.com/EricFinland/hearth/releases)
 
 ### Local LLMs and autonomous agents, sandboxed by default. Every run audited. The whole OS reproducible from one flake.
@@ -158,7 +159,9 @@ curl http://your-hearth:8770/metrics
 ## Contributing & security
 
 Contributions are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md) for the build
-and self-test workflow. Found a security issue? Please follow
+and self-test workflow. Questions, ideas, or just want to follow along? Join the
+[Hearth Discord](https://discord.gg/8bathX4UQY), which covers both the NixOS and Windows editions and
+posts every push to this repo live. Found a security issue? Please follow
 [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 > **First-boot note:** the config ships a default console password for the very
@@ -169,6 +172,6 @@ and self-test workflow. Found a security issue? Please follow
 
 <div align="center">
 
-Built by <a href="https://github.com/EricFinland">Eric Catalano</a> &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; <a href="https://ericfinland.github.io/hearth/">Docs</a> &nbsp;·&nbsp; <a href="CONTRIBUTING.md">Contribute</a> &nbsp;·&nbsp; <a href="SECURITY.md">Security</a>
+Built by <a href="https://github.com/EricFinland">Eric Catalano</a> &nbsp;·&nbsp; MIT licensed &nbsp;·&nbsp; <a href="https://ericfinland.github.io/hearth/">Docs</a> &nbsp;·&nbsp; <a href="CONTRIBUTING.md">Contribute</a> &nbsp;·&nbsp; <a href="SECURITY.md">Security</a> &nbsp;·&nbsp; <a href="https://discord.gg/8bathX4UQY">Discord</a>
 
 </div>
