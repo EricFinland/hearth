@@ -13,6 +13,7 @@ export default defineConfig({
       favicon: '/favicon.svg',
       social: {
         github: 'https://github.com/EricFinland/hearth',
+        discord: 'https://discord.gg/8bathX4UQY',
       },
       editLink: {
         baseUrl: 'https://github.com/EricFinland/hearth/edit/main/site/',

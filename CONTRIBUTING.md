@@ -48,7 +48,8 @@ reproducible from boot, are especially welcome.
 
 ## Reporting bugs and ideas
 
-Open an issue for bugs and feature requests. For anything security-sensitive,
+Open an issue for bugs and feature requests. For questions, design discussion,
+or to float an idea before writing it up, use the [Hearth Discord](https://discord.gg/8bathX4UQY). For anything security-sensitive,
 follow [SECURITY.md](SECURITY.md) instead of filing a public issue.
 
 By contributing, you agree that your contributions are licensed under the
