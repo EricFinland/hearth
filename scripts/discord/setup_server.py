@@ -441,6 +441,15 @@ async def build(guild: discord.Guild, me: discord.Member):
         log("~ server widget enabled")
         await guild.edit(widget_enabled=True, widget_channel=ch["welcome"], reason=REASON)
 
+    # Join messages go to #welcome (not #general), without the "Wave to say hi"
+    # sticker prompt; boost/tip/setup nags are turned off.
+    flags = discord.SystemChannelFlags(
+        join_notifications=True, join_notification_replies=False,
+        premium_subscriptions=True, guild_reminder_notifications=False)
+    if guild.system_channel != ch["welcome"] or guild.system_channel_flags != flags:
+        log("~ join messages -> #welcome (no wave prompt)")
+        await guild.edit(system_channel=ch["welcome"], system_channel_flags=flags, reason=REASON)
+
     await ensure_automod(guild, ch["mod-log"], [maint, mod])
 
     owner = await guild.fetch_member(guild.owner_id)
