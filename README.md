@@ -142,7 +142,7 @@ curl http://your-hearth:8770/metrics
 - **Flight recorder and replay viewer:** every run records a structured per-step event stream; a scrubber replays it step by step, with each tool call's args, output, duration, and permission verdict inspectable.
 - **Run diff:** `POST /diff` runs the same prompt against two local models and returns tokens, latency, and output side by side, so "which model for this?" is a live test, not a guess.
 - **Spend circuit breaker:** a hard daily token budget across all runs; at the cap, running agents halt gracefully and new runs refuse to start until local midnight.
-- **Unified alerting:** one fan-out pushes every alert to Telegram and ntfy, firing on errors, tripwire trips, and budget breaches so the box can reach your phone.
+- **Unified alerting:** one fan-out pushes every alert to Telegram, ntfy, and a Discord channel, firing on errors, tripwire trips, and budget breaches so the box can reach your phone.
 - **Declarative missions:** scheduled cron-as-flake missions you define in the flake, rendered read-only and merged with cockpit-created ones, each launch carrying its capability manifest and egress allowlist.
 - **Tycoon map:** agent families as buildings, runs as workers walking to their door, a power plant driven by the GPU, a fuel gauge against the daily cap, and thirteen trophies computed from the audit log.
 - **System bill of materials:** `/sbom` lists every flake input, package, model, and module on the box with the hash that pins it, generated from the flake at build time.
