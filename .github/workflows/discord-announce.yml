@@ -1,0 +1,77 @@
+name: Announce in Discord
+
+# Posts a merged pull request, or a published release, into the project's
+# Discord release channel. The message is built by scripts/discord_announce.py;
+# this file only decides when it runs and hands it the event.
+#
+# WHY THE EVENT IS PASSED THROUGH env:
+# A pull request title and body are written by whoever opened it. Expanding
+# either one into a run: block would be a shell injection on the runner, so
+# every field arrives as an environment variable and the script reads it as
+# data. Nothing from the event is ever interpolated into a command.
+#
+# THE CHANNEL:
+# The DISCORD_WEBHOOK_URL secret, which may list several webhooks separated by
+# commas. A pull request from a fork gets no secrets, and a clone of this
+# repository will not have set one; in both cases the script prints what it
+# would have said and succeeds, because a missing announcement is not a
+# broken build.
+
+on:
+  pull_request:
+    types: [ closed ]
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-announce-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  announce:
+    name: announce
+    # Closing a pull request without merging it is not news.
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Runs on workflow_dispatch too, where neither announce step applies, so
+      # the manual trigger is a way to check the announcer without posting.
+      - name: Self-test the announcer
+        run: python scripts/discord_announce.py --self-test
+
+      - name: Announce the merged pull request
+        if: github.event_name == 'pull_request'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python scripts/discord_announce.py pr
+
+      - name: Announce the published release
+        if: github.event_name == 'release'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: python scripts/discord_announce.py release
